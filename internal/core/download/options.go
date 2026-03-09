@@ -20,9 +20,9 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{
-		Workers:            6,
+		Workers:            12,
 		MinChunkSize:       2 * 1024 * 1024,
-		MaxChunkSize:       16 * 1024 * 1024,
+		MaxChunkSize:       8 * 1024 * 1024,
 		Timeout:            30 * time.Second,
 		MaxRetries:         10,
 		BaseBackoff:        500 * time.Millisecond,
