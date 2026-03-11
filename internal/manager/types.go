@@ -60,6 +60,9 @@ type DownloadRecord struct {
 	Progress    ProgressInfo     `json:"progress"`
 	Options     download.Options `json:"options"`
 	Error       string           `json:"error,omitempty"`
+	StartedAt   time.Time        `json:"started_at,omitempty"`
+	CompletedAt time.Time        `json:"completed_at,omitempty"`
+	ActiveFor   time.Duration    `json:"active_for"`
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
 }

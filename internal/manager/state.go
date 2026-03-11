@@ -30,7 +30,21 @@ func (m *Manager) loadState() error {
 		if rec.ID == "" {
 			continue
 		}
+		if rec.Status == StatusCompleted {
+			if rec.ActiveFor <= 0 && !rec.CompletedAt.IsZero() && !rec.CreatedAt.IsZero() {
+				rec.ActiveFor = rec.CompletedAt.Sub(rec.CreatedAt)
+			}
+			if rec.ActiveFor < 0 {
+				rec.ActiveFor = 0
+			}
+		}
 		if rec.Status == StatusDownloading {
+			if !rec.StartedAt.IsZero() {
+				if ranFor := time.Since(rec.StartedAt); ranFor > 0 {
+					rec.ActiveFor += ranFor
+				}
+			}
+			rec.StartedAt = time.Time{}
 			rec.Status = StatusPaused
 			rec.Error = ""
 			rec.UpdatedAt = time.Now()

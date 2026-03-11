@@ -22,9 +22,11 @@ func (m *Manager) scheduleLocked() {
 		job.cancel = cancel
 		job.rec.Status = StatusDownloading
 		job.rec.Error = ""
-		job.rec.UpdatedAt = time.Now()
+		now := time.Now()
+		job.rec.StartedAt = now
+		job.rec.UpdatedAt = now
 		m.active[id] = struct{}{}
-		m.publishLocked(Event{Type: EventStarted, ID: id, Status: StatusDownloading, At: time.Now()})
+		m.publishLocked(Event{Type: EventStarted, ID: id, Status: StatusDownloading, At: now})
 		_ = m.saveStateIfDueLocked(true)
 
 		m.wg.Add(1)

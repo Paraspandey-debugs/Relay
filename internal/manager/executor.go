@@ -75,10 +75,18 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 	job.cancel = nil
 
 	now := time.Now()
+	if !job.rec.StartedAt.IsZero() {
+		if ranFor := now.Sub(job.rec.StartedAt); ranFor > 0 {
+			job.rec.ActiveFor += ranFor
+		}
+		job.rec.StartedAt = time.Time{}
+	}
+
 	switch {
 	case err == nil:
 		job.rec.Status = StatusCompleted
 		job.rec.Error = ""
+		job.rec.CompletedAt = now
 		job.rec.UpdatedAt = now
 		m.publishLocked(Event{Type: EventCompleted, ID: id, Status: StatusCompleted, At: now})
 	case errors.Is(err, context.Canceled):
