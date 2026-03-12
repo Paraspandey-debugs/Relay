@@ -22,7 +22,7 @@ func defaultKeys() keyMap {
 	return keyMap{
 		Up: key.NewBinding(
 			key.WithKeys("up", "k"),
-			key.WithHelp("k/up", "move up"),
+			key.WithHelp("", ""),
 		),
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),

@@ -21,10 +21,22 @@ import (
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
 
+const relayStartupASCII = `
+
+____  _____ _         _ __   __
+|  _ \| ____| |      / \\ \ / /
+| |_) |  _| | |     / _ \\ V / 
+|  _ <| |___| |___ / ___ \| |  
+|_| \_\_____|_____/_/   \_\_|  
+`
+
+const startupSplashDuration = 1400 * time.Millisecond
+
 type screen int
 
 const (
-	listScreen screen = iota
+	splashScreen screen = iota
+	listScreen
 	addScreen
 )
 
@@ -41,6 +53,7 @@ type actionResultMsg struct {
 }
 
 type tickMsg time.Time
+type splashDoneMsg struct{}
 
 type Option func(*Model)
 
@@ -49,6 +62,12 @@ func WithTheme(name string) Option {
 		if th, ok := ThemeByName(name); ok {
 			m.theme = th
 		}
+	}
+}
+
+func WithThemeOverrides(overrides map[string]string) Option {
+	return func(m *Model) {
+		m.theme = ApplyThemeOverrides(m.theme, overrides)
 	}
 }
 
@@ -61,6 +80,14 @@ func WithCleanupOnRemove(enabled bool) Option {
 func WithDefaultAddOptions(opts download.Options) Option {
 	return func(m *Model) {
 		m.defaultAddOptions = opts
+	}
+}
+
+func WithTickEvery(d time.Duration) Option {
+	return func(m *Model) {
+		if d > 0 {
+			m.tickEvery = d
+		}
 	}
 }
 
@@ -99,6 +126,7 @@ type Model struct {
 
 	cleanupOnRemove   bool
 	defaultAddOptions download.Options
+	tickEvery         time.Duration
 	progressMemo      map[string]memoProgress
 	homeDir           string
 	recentDir         string
@@ -143,10 +171,11 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 			progress.WithDefaultGradient(),
 			progress.WithoutPercentage(),
 		),
-		screen:          listScreen,
+		screen:          splashScreen,
 		input:           in,
 		theme:           OceanTheme,
 		cleanupOnRemove: true,
+		tickEvery:       250 * time.Millisecond,
 		now:             time.Now(),
 		progressMemo:    make(map[string]memoProgress),
 		homeDir:         homeDir,
@@ -186,7 +215,7 @@ func Run(ctx context.Context, mgr *manager.Manager, opts ...Option) error {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.Batch(textinput.Blink, tickCmd())
+	return tea.Batch(textinput.Blink, tickCmd(m.tickEvery), splashDoneCmd(startupSplashDuration))
 }
 
 func (m *Model) refreshSnapshot() {
@@ -345,9 +374,31 @@ func humanETA(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(250*time.Millisecond, func(t time.Time) tea.Msg {
+func humanDuration(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d < time.Second {
+		return "<1s"
+	}
+	return d.Round(time.Second).String()
+}
+
+func tickCmd(d time.Duration) tea.Cmd {
+	if d <= 0 {
+		d = 250 * time.Millisecond
+	}
+	return tea.Tick(d, func(t time.Time) tea.Msg {
 		return tickMsg(t)
+	})
+}
+
+func splashDoneCmd(d time.Duration) tea.Cmd {
+	if d <= 0 {
+		d = startupSplashDuration
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return splashDoneMsg{}
 	})
 }
 
