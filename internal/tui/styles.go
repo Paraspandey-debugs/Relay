@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 type Theme struct {
 	Name         string
@@ -73,6 +77,46 @@ func ThemeByName(name string) (Theme, bool) {
 	default:
 		return Theme{}, false
 	}
+}
+
+func ApplyThemeOverrides(base Theme, overrides map[string]string) Theme {
+	if len(overrides) == 0 {
+		return base
+	}
+
+	for key, value := range overrides {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			continue
+		}
+
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "background":
+			base.Background = v
+		case "foreground":
+			base.Foreground = v
+		case "accent":
+			base.Accent = v
+		case "secondary":
+			base.Secondary = v
+		case "success":
+			base.Success = v
+		case "warning":
+			base.Warning = v
+		case "error":
+			base.Error = v
+		case "muted":
+			base.Muted = v
+		case "header":
+			base.Header = v
+		case "card":
+			base.Card = v
+		case "selectedcard", "selected-card":
+			base.SelectedCard = v
+		}
+	}
+
+	return base
 }
 
 type styles struct {
