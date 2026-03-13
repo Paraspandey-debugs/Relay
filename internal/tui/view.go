@@ -3,19 +3,24 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
 
 func (m *Model) View() string {
+	if m.screen == splashScreen {
+		return m.renderSplash()
+	}
+
 	if m.screen == addScreen {
 		return m.renderAddInput()
 	}
 
 	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Relay Download Manager"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.Subtle.Render("Colorful Bubble Tea UI for Relay"))
+	b.WriteString(m.styles.Header.Render("Relay"))
 	b.WriteString("\n\n")
 
 	if len(m.items) == 0 {
@@ -54,6 +59,17 @@ func (m *Model) View() string {
 	}
 
 	return m.styles.App.Render(b.String())
+}
+
+func (m *Model) renderSplash() string {
+	banner := m.styles.Header.Render(strings.TrimSpace(relayStartupASCII))
+	subtitle := m.styles.Subtle.Render("download manager")
+	content := lipgloss.JoinVertical(lipgloss.Center, banner, "", subtitle)
+
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return content
 }
 
 func (m *Model) renderAddInput() string {
@@ -110,15 +126,27 @@ func (m *Model) renderAddInput() string {
 func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) string {
 	bar := m.progress.ViewAs(progressRatio(item.Progress))
 	status := m.statusPill(item.Status)
-	meta := fmt.Sprintf(
-		"%s  %s  %s/%s  %s  ETA %s",
-		shortID(item.ID),
-		status,
-		humanBytes(item.Progress.Downloaded),
-		totalLabel(item.Progress.Total),
-		humanSpeed(item.Progress.SpeedBps),
-		humanETA(item.Progress.ETA),
-	)
+	meta := ""
+	if item.Status == manager.StatusCompleted {
+		meta = fmt.Sprintf(
+			"%s  %s  %s/%s  completed in %s",
+			shortID(item.ID),
+			status,
+			humanBytes(item.Progress.Downloaded),
+			totalLabel(item.Progress.Total),
+			humanDuration(completedDuration(item)),
+		)
+	} else {
+		meta = fmt.Sprintf(
+			"%s  %s  %s/%s  %s  ETA %s",
+			shortID(item.ID),
+			status,
+			humanBytes(item.Progress.Downloaded),
+			totalLabel(item.Progress.Total),
+			humanSpeed(item.Progress.SpeedBps),
+			humanETA(item.Progress.ETA),
+		)
+	}
 
 	fileLine := item.Destination
 	if item.Destination == "" {
@@ -154,11 +182,34 @@ func (m *Model) renderSelected(item manager.DownloadRecord) string {
 	b.WriteString(m.styles.Muted.Render("ID: "+item.ID) + "\n")
 	b.WriteString(m.styles.Muted.Render("URL: "+item.URL) + "\n")
 	b.WriteString(m.styles.Muted.Render("Path: " + item.Destination))
+	if item.Status == manager.StatusCompleted {
+		b.WriteString("\n")
+		b.WriteString(m.styles.Muted.Render("Completed in: " + humanDuration(completedDuration(item))))
+	}
 	if item.Error != "" {
 		b.WriteString("\n")
 		b.WriteString(m.styles.ErrorLine.Render("Last error: " + item.Error))
 	}
 	return b.String()
+}
+
+func completedDuration(item manager.DownloadRecord) time.Duration {
+	if item.ActiveFor > 0 {
+		return item.ActiveFor
+	}
+	if !item.CompletedAt.IsZero() && !item.CreatedAt.IsZero() {
+		d := item.CompletedAt.Sub(item.CreatedAt)
+		if d > 0 {
+			return d
+		}
+	}
+	if !item.UpdatedAt.IsZero() && !item.CreatedAt.IsZero() {
+		d := item.UpdatedAt.Sub(item.CreatedAt)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 func (m *Model) statusPill(s manager.Status) string {

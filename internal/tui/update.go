@@ -19,10 +19,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 	case tea.KeyMsg:
+		if m.screen == splashScreen {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		if m.screen == addScreen {
 			return m.handleAddInput(msg)
 		}
 		return m.handleListKeys(msg)
+	case splashDoneMsg:
+		if m.screen == splashScreen {
+			m.screen = listScreen
+		}
+		return m, nil
 	case manager.Event:
 		if msg.Progress != nil {
 			memo := m.progressMemo[msg.ID]
@@ -75,7 +86,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(m.progressMemo, id)
 			}
 		}
-		return m, tickCmd()
+		return m, tickCmd(m.tickEvery)
 	default:
 		if m.screen == addScreen {
 			var cmd tea.Cmd
