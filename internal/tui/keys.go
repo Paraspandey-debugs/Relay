@@ -11,6 +11,7 @@ type keyMap struct {
 	Pause         key.Binding
 	Resume        key.Binding
 	Remove        key.Binding
+	Settings      key.Binding
 	MoveQueueUp   key.Binding
 	MoveQueueDown key.Binding
 	Refresh       key.Binding
@@ -44,6 +45,10 @@ func defaultKeys() keyMap {
 			key.WithKeys("x"),
 			key.WithHelp("x", "remove"),
 		),
+		Settings: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "settings"),
+		),
 		MoveQueueUp: key.NewBinding(
 			key.WithKeys("K"),
 			key.WithHelp("K", "queue up"),
@@ -68,12 +73,12 @@ func defaultKeys() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Add, k.Pause, k.Resume, k.Remove, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Add, k.Pause, k.Resume, k.Remove, k.Settings, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Add, k.Pause, k.Resume, k.Remove},
+		{k.Up, k.Down, k.Add, k.Pause, k.Resume, k.Remove, k.Settings},
 		{k.MoveQueueUp, k.MoveQueueDown, k.Refresh, k.Help, k.Quit},
 	}
 }

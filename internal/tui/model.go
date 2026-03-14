@@ -38,6 +38,7 @@ const (
 	splashScreen screen = iota
 	listScreen
 	addScreen
+	settingsScreen
 )
 
 type addStep int
@@ -111,6 +112,7 @@ type Model struct {
 	showHelp bool
 
 	input textinput.Model
+	settingsInput textinput.Model
 	step  addStep
 	add   addDraft
 
@@ -134,6 +136,10 @@ type Model struct {
 	browserSelected   int
 	browserOffset     int
 	browserEntries    []browserEntry
+
+	settingsCursor  int
+	settingsEditing bool
+	settingsFields  []settingField
 }
 
 type memoProgress struct {
@@ -162,6 +168,11 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	in.CharLimit = 4096
 	in.Blur()
 
+	settingsIn := textinput.New()
+	settingsIn.Prompt = "> "
+	settingsIn.CharLimit = 256
+	settingsIn.Blur()
+
 	m := &Model{
 		ctx:  ctx,
 		mgr:  mgr,
@@ -173,6 +184,7 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 		),
 		screen:          splashScreen,
 		input:           in,
+		settingsInput:   settingsIn,
 		theme:           OceanTheme,
 		cleanupOnRemove: true,
 		tickEvery:       250 * time.Millisecond,

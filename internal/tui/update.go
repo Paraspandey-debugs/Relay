@@ -28,6 +28,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.screen == addScreen {
 			return m.handleAddInput(msg)
 		}
+		if m.screen == settingsScreen {
+			return m.handleSettingsKeys(msg)
+		}
 		return m.handleListKeys(msg)
 	case splashDoneMsg:
 		if m.screen == splashScreen {
@@ -88,9 +91,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickCmd(m.tickEvery)
 	default:
-		if m.screen == addScreen {
+		if m.screen == addScreen || (m.screen == settingsScreen && m.settingsEditing) {
 			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
+			if m.screen == addScreen {
+				m.input, cmd = m.input.Update(msg)
+			} else {
+				m.settingsInput, cmd = m.settingsInput.Update(msg)
+			}
 			return m, cmd
 		}
 		return m, nil
@@ -197,6 +204,9 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.moveSelectedQueue(-1)
 	case key.Matches(msg, m.keys.MoveQueueDown):
 		return m.moveSelectedQueue(1)
+	case key.Matches(msg, m.keys.Settings):
+		m.openSettings()
+		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
 		m.refreshSnapshot()
 		m.message = "refreshed"

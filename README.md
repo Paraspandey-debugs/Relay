@@ -54,13 +54,21 @@ ____  _____ _         _ __   __
 ```bash
 git clone https://github.com/Paraspandey-debugs/Relay.git
 cd Relay
-go build -o relay ./cmd/dm
+bash installer.sh
 ```
 
-Or install directly:
+This installs `relayd` into your terminal, typically at `/usr/local/bin/relayd` or `~/.local/bin/relayd`.
+
+If you want a custom install location:
 
 ```bash
-go install github.com/Paraspandey-debugs/Relay/cmd/dm@latest
+INSTALL_DIR=~/.local/bin bash installer.sh
+```
+
+If you only want a local binary without installing to your `PATH`:
+
+```bash
+go build -o relayd ./cmd/dm
 ```
 
 ---
@@ -68,17 +76,20 @@ go install github.com/Paraspandey-debugs/Relay/cmd/dm@latest
 ## Usage
 
 ```bash
-# Launch with defaults
-./relay
+# Launch after installing with installer.sh
+relayd
 
 # Use the sunset theme with 5 concurrent downloads
-./relay --theme sunset --concurrency 5
+relayd --theme sunset --concurrency 5
 
 # Point to a custom state file
-./relay --state ~/my-downloads.state.json
+relayd --state ~/my-downloads.state.json
 
 # Override individual colors
-./relay --color-accent "#FF00FF" --color-background "#0D0D0D"
+relayd --color-accent "#FF00FF" --color-background "#0D0D0D"
+
+# If you built locally instead of installing
+./relayd
 ```
 
 ### All Flags
@@ -113,6 +124,7 @@ go install github.com/Paraspandey-debugs/Relay/cmd/dm@latest
 | `p` | Pause the selected download |
 | `r` | Resume the selected download |
 | `x` | Remove the selected download |
+| `s` | Open the download settings panel |
 | `K` | Move selected item up in the queue |
 | `J` | Move selected item down in the queue |
 | `R` | Force refresh the view |
@@ -167,7 +179,7 @@ Each download inherits from a set of defaults that can be overridden per-job:
 | Option | Default | Description |
 |---|---|---|
 | `Workers` | `12` | Number of parallel chunk workers |
-| `MinChunkSize` | `2 MB` | Minimum size for each chunk |
+| `MinChunkSize` | `1 MB` | Minimum size for each chunk |
 | `MaxChunkSize` | `8 MB` | Maximum size for each chunk |
 | `Timeout` | `30s` | Per-request HTTP timeout |
 | `MaxRetries` | `10` | Max retry attempts on failure |

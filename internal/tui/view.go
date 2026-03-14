@@ -19,6 +19,10 @@ func (m *Model) View() string {
 		return m.renderAddInput()
 	}
 
+	if m.screen == settingsScreen {
+		return m.renderSettings()
+	}
+
 	var b strings.Builder
 	b.WriteString(m.styles.Header.Render("Relay"))
 	b.WriteString("\n\n")
