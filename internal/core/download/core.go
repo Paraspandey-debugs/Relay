@@ -350,12 +350,14 @@ func downloadSingleV2(
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	total := resp.ContentLength
-	if meta.Total > 0 {
-		total = meta.Total
-	}
-	if resp.StatusCode == http.StatusPartialContent && existing > 0 && total > 0 {
-		total += existing
+	// Prefer probed absolute size when available. For resume without probe total,
+	// derive full size as existing bytes + remaining response length.
+	total := meta.Total
+	if total <= 0 {
+		total = resp.ContentLength
+		if resp.StatusCode == http.StatusPartialContent && existing > 0 && total > 0 {
+			total += existing
+		}
 	}
 
 	var written atomic.Int64
