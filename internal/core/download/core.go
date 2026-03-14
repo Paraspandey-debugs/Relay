@@ -8,18 +8,13 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-)
 
-type probeMeta struct {
-	Total        int64
-	AcceptRanges bool
-	ETag         string
-	LastModified string
-}
+	"github.com/Paraspandey-debugs/Relay/internal/core/checksum"
+	corehttp "github.com/Paraspandey-debugs/Relay/internal/core/httpclient"
+)
 
 func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, progress chan<- ProgressMsg) error {
 	cfg := DefaultOptions()
@@ -36,11 +31,11 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 		cfg.MaxChunkSize = cfg.MinChunkSize
 	}
 
-	client := &http.Client{Timeout: cfg.Timeout}
+	client := corehttp.New(cfg.Timeout)
 	partPath := dstPath + ".part"
 	statePath := dstPath + ".part.state.json"
 
-	meta, err := probe(ctx, client, url, cfg.UserAgent)
+	meta, err := corehttp.Probe(ctx, client, url, cfg.UserAgent)
 	if err != nil {
 		return fmt.Errorf("probe failed: %w", err)
 	}
@@ -135,49 +130,7 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 	return verifyAndFinalize(dstPath, partPath, statePath, cfg.ExpectedSHA256Hex)
 }
 
-func probe(ctx context.Context, client *http.Client, url, ua string) (probeMeta, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
-	req.Header.Set("User-Agent", ua)
-	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode >= 400 {
-		if resp != nil {
-			resp.Body.Close()
-		}
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		req2.Header.Set("Range", "bytes=0-0")
-		req2.Header.Set("User-Agent", ua)
-		r2, e2 := client.Do(req2)
-		if e2 != nil {
-			return probeMeta{}, e2
-		}
-		defer r2.Body.Close()
-		m := probeMeta{
-			ETag:         r2.Header.Get("ETag"),
-			LastModified: r2.Header.Get("Last-Modified"),
-		}
-		if r2.StatusCode == http.StatusPartialContent {
-			m.AcceptRanges = true
-			if total, ok := parseContentRangeTotal(r2.Header.Get("Content-Range")); ok {
-				m.Total = total
-			}
-		} else if r2.StatusCode >= 200 && r2.StatusCode < 300 {
-			m.Total = r2.ContentLength
-			m.AcceptRanges = strings.EqualFold(strings.TrimSpace(r2.Header.Get("Accept-Ranges")), "bytes")
-		}
-		io.Copy(io.Discard, r2.Body)
-		return m, nil
-	}
-	defer resp.Body.Close()
-
-	return probeMeta{
-		Total:        resp.ContentLength,
-		AcceptRanges: strings.EqualFold(strings.TrimSpace(resp.Header.Get("Accept-Ranges")), "bytes"),
-		ETag:         resp.Header.Get("ETag"),
-		LastModified: resp.Header.Get("Last-Modified"),
-	}, nil
-}
-
-func loadOrInitState(url, dst, part, statePath string, meta probeMeta, cfg Options) (*downloadState, error) {
+func loadOrInitState(url, dst, part, statePath string, meta corehttp.ProbeMeta, cfg Options) (*downloadState, error) {
 	if cfg.NoResume {
 		_ = os.Remove(statePath)
 		_ = os.Remove(part)
@@ -298,7 +251,7 @@ func fetchSegment(
 			if i == cfg.MaxRetries-1 {
 				return fmt.Errorf("expected 206 for range, got %d", resp.StatusCode)
 			}
-			if err := sleepBackoff(ctx, cfg.BaseBackoff, cfg.MaxBackoff, i, retryAfterSeconds(resp)); err != nil {
+			if err := sleepBackoff(ctx, cfg.BaseBackoff, cfg.MaxBackoff, i, corehttp.RetryAfterSeconds(resp)); err != nil {
 				return err
 			}
 			continue
@@ -339,7 +292,7 @@ func downloadSingleV2(
 	ctx context.Context,
 	client *http.Client,
 	url, finalPath, partPath, statePath string,
-	meta probeMeta,
+	meta corehttp.ProbeMeta,
 	cfg Options,
 	progress chan<- ProgressMsg,
 ) error {
@@ -424,11 +377,11 @@ func downloadSingleV2(
 
 func verifyAndFinalize(finalPath, partPath, statePath, expectedSHA string) error {
 	if expectedSHA != "" {
-		sum, err := fileSHA256(partPath)
+		sum, ok, err := checksum.MatchesSHA256(partPath, expectedSHA)
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(sum, strings.TrimSpace(expectedSHA)) {
+		if !ok {
 			return fmt.Errorf("checksum mismatch: got %s", sum)
 		}
 	}
