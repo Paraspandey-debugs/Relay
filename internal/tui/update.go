@@ -56,20 +56,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshSnapshot()
 			m.message = fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID))
 			m.messageUntil = time.Now().Add(4 * time.Second)
+			m.appendLog(fmt.Sprintf("%s %s", msg.Type, shortID(msg.ID)))
 		}
 		if msg.Error != "" {
 			m.errMsg = msg.Error
 			m.errUntil = time.Now().Add(8 * time.Second)
+			m.appendLog("error: " + msg.Error)
 		}
 		return m, nil
 	case actionResultMsg:
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			m.errUntil = time.Now().Add(8 * time.Second)
+			m.appendLog("action failed: " + msg.err.Error())
 			return m, nil
 		}
 		m.message = msg.info
 		m.messageUntil = time.Now().Add(4 * time.Second)
+		m.appendLog(msg.info)
 		m.errMsg = ""
 		m.refreshSnapshot()
 		return m, nil
@@ -147,6 +151,11 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.add.dst = value
 		m.recentDir = filepath.Dir(value)
+		if existing, ok := m.mgr.FindDuplicate(m.add.url, m.add.dst); ok {
+			m.errMsg = fmt.Sprintf("duplicate exists: %s", shortID(existing.ID))
+			m.errUntil = time.Now().Add(8 * time.Second)
+			return m, nil
+		}
 		m.input.Blur()
 		m.screen = listScreen
 		m.step = addURLStep
@@ -161,19 +170,121 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.removeConfirm {
+		switch {
+		case key.Matches(msg, m.keys.Confirm):
+			id := m.pendingRemoveID
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			if id == "" {
+				return m, nil
+			}
+			return m, removeCmd(m.mgr, id, m.cleanupOnRemove)
+		case key.Matches(msg, m.keys.Cancel):
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			m.message = "remove cancelled"
+			m.messageUntil = time.Now().Add(3 * time.Second)
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
+	if m.searchActive {
+		switch msg.String() {
+		case "esc":
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			m.ensureSelectionVisible()
+			return m, nil
+		case "enter":
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.ensureSelectionVisible()
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
+			m.ensureSelectionVisible()
+			return m, cmd
+		}
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
+	case key.Matches(msg, m.keys.Log):
+		m.showLogPanel = !m.showLogPanel
+		if m.showLogPanel {
+			m.logCursor = len(m.logEntries) - 1
+			if m.logCursor < 0 {
+				m.logCursor = 0
+			}
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.LogTop):
+		m.logCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.LogBottom):
+		m.logCursor = len(m.logEntries) - 1
+		if m.logCursor < 0 {
+			m.logCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.TabQueued):
+		m.activeTab = tabQueued
+		m.ensureSelectionVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.TabActive):
+		m.activeTab = tabActive
+		m.ensureSelectionVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.TabDone):
+		m.activeTab = tabDone
+		m.ensureSelectionVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.NextTab):
+		m.activeTab = (m.activeTab + 1) % 3
+		m.ensureSelectionVisible()
+		return m, nil
+	case key.Matches(msg, m.keys.Search):
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			m.searchInput.Blur()
+			m.searchActive = false
+			m.ensureSelectionVisible()
+			return m, nil
+		}
+		m.searchActive = true
+		m.searchInput.Focus()
+		return m, nil
 	case key.Matches(msg, m.keys.Help):
 		m.showHelp = !m.showHelp
 		return m, nil
 	case key.Matches(msg, m.keys.Up):
+		if m.showLogPanel {
+			if m.logCursor > 0 {
+				m.logCursor--
+			}
+			return m, nil
+		}
 		if m.selected > 0 {
 			m.selected--
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.Down):
-		if m.selected < len(m.items)-1 {
+		if m.showLogPanel {
+			if m.logCursor < len(m.logEntries)-1 {
+				m.logCursor++
+			}
+			return m, nil
+		}
+		if m.selected < len(m.visibleItems())-1 {
 			m.selected++
 		}
 		return m, nil
@@ -197,7 +308,9 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Remove):
 		if item, ok := m.currentItem(); ok {
-			return m, removeCmd(m.mgr, item.ID, m.cleanupOnRemove)
+			m.pendingRemoveID = item.ID
+			m.removeConfirm = true
+			return m, nil
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.MoveQueueUp):

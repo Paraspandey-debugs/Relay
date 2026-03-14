@@ -125,6 +125,8 @@ type styles struct {
 	Subtle       lipgloss.Style
 	Label        lipgloss.Style
 	Muted        lipgloss.Style
+	FooterCard   lipgloss.Style
+	FooterTitle  lipgloss.Style
 	DownloadCard lipgloss.Style
 	SelectedCard lipgloss.Style
 	CardTitle    lipgloss.Style
@@ -151,6 +153,14 @@ func newStyles(t Theme) styles {
 			Foreground(lipgloss.Color(t.Accent)).
 			Bold(true),
 		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)),
+		FooterCard: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.Secondary)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(0, 1),
+		FooterTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Accent)).
+			Bold(true),
 		DownloadCard: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Secondary)).

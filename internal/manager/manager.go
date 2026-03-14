@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -70,6 +71,9 @@ func (m *Manager) Events() <-chan Event {
 }
 
 func (m *Manager) Add(req AddRequest) (string, error) {
+	req.URL = strings.TrimSpace(req.URL)
+	req.Destination = strings.TrimSpace(req.Destination)
+
 	if req.URL == "" {
 		return "", errors.New("url is required")
 	}
@@ -101,6 +105,10 @@ func (m *Manager) Add(req AddRequest) (string, error) {
 		return "", errors.New("manager is closed")
 	}
 
+	if existing, ok := m.findDuplicateLocked(req.URL, req.Destination); ok {
+		return "", fmt.Errorf("duplicate download already exists (%s)", existing.ID)
+	}
+
 	m.jobs[id] = entry
 	m.queue = append(m.queue, id)
 	m.publishLocked(Event{Type: EventQueued, ID: id, Status: StatusQueued, At: time.Now()})
@@ -111,6 +119,21 @@ func (m *Manager) Add(req AddRequest) (string, error) {
 	m.scheduleLocked()
 
 	return id, nil
+}
+
+func (m *Manager) FindDuplicate(url, destination string) (DownloadRecord, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.findDuplicateLocked(strings.TrimSpace(url), strings.TrimSpace(destination))
+}
+
+func (m *Manager) findDuplicateLocked(url, destination string) (DownloadRecord, bool) {
+	for _, job := range m.jobs {
+		if job.rec.URL == url && job.rec.Destination == destination {
+			return job.rec, true
+		}
+	}
+	return DownloadRecord{}, false
 }
 
 func (m *Manager) Pause(id string) error {

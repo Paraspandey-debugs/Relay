@@ -25,13 +25,24 @@ func (m *Model) View() string {
 
 	var b strings.Builder
 	b.WriteString(m.styles.Header.Render("Relay"))
+	b.WriteString("\n")
+	b.WriteString(m.renderTabs())
+	b.WriteString("\n")
+	b.WriteString(m.renderStatsLine())
+	b.WriteString("\n")
+	b.WriteString(m.renderSearchLine())
 	b.WriteString("\n\n")
 
-	if len(m.items) == 0 {
-		b.WriteString(m.styles.Muted.Render("No downloads yet. Press 'a' to add one."))
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		if m.searchQuery != "" {
+			b.WriteString(m.styles.Muted.Render("No downloads match the current filter."))
+		} else {
+			b.WriteString(m.styles.Muted.Render("No downloads in this tab. Press 'a' to add one."))
+		}
 		b.WriteString("\n\n")
 	} else {
-		for i, item := range m.items {
+		for i, item := range visible {
 			selected := i == m.selected
 			b.WriteString(m.renderDownloadRow(item, selected))
 			b.WriteString("\n")
@@ -41,6 +52,11 @@ func (m *Model) View() string {
 
 	b.WriteString(m.renderQueue())
 	b.WriteString("\n")
+	if m.showLogPanel {
+		b.WriteString("\n")
+		b.WriteString(m.renderLogPanel())
+		b.WriteString("\n")
+	}
 
 	if item, ok := m.currentItem(); ok {
 		b.WriteString(m.renderSelected(item))
@@ -56,13 +72,184 @@ func (m *Model) View() string {
 	}
 
 	b.WriteString("\n")
-	if m.showHelp {
-		b.WriteString(m.help.View(m.keys))
-	} else {
-		b.WriteString(m.help.ShortHelpView(m.keys.ShortHelp()))
+	b.WriteString(m.renderHelpBlock())
+
+	main := m.styles.App.Render(b.String())
+	if m.removeConfirm {
+		return m.renderConfirmOverlay(main)
+	}
+	return main
+}
+
+func (m *Model) renderHelpBlock() string {
+	availableWidth := 72
+	if m.width > 0 {
+		availableWidth = m.width - 8
+	}
+	if availableWidth < 28 {
+		availableWidth = 28
 	}
 
-	return m.styles.App.Render(b.String())
+	entries := m.shortGuideEntries()
+	if m.showHelp {
+		entries = m.fullGuideEntries()
+	}
+
+	guideText := m.renderGuideEntries(entries, availableWidth-4)
+	body := m.styles.FooterTitle.Render("Guide") + "\n" + guideText
+	return m.styles.FooterCard.MaxWidth(availableWidth).Render(body)
+}
+
+func (m *Model) shortGuideEntries() []string {
+	return []string{
+		"1/2/3 tab", "tab next", "f filter", "l log", "a add", "p pause", "r resume", "x remove", "ctrl+q quit",
+	}
+}
+
+func (m *Model) fullGuideEntries() []string {
+	return []string{
+		"1 queued", "2 active", "3 done", "tab next", "f filter", "l log",
+		"j/k move", "p pause", "r resume", "x remove", "y confirm", "n cancel",
+		"K/J queue", "R refresh", "g/G log top/bottom", "s settings", "? hide guide", "ctrl+q quit",
+	}
+}
+
+func (m *Model) renderGuideEntries(entries []string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+
+	var rawLines []string
+	line := ""
+	for _, entry := range entries {
+		part := "[" + entry + "]"
+		plainLen := len(entry) + 2
+
+		currentLen := len(line)
+		if line == "" {
+			line = part
+			continue
+		}
+		if currentLen+2+plainLen > width {
+			rawLines = append(rawLines, line)
+			line = part
+			continue
+		}
+		line += "  " + part
+	}
+	if line != "" {
+		rawLines = append(rawLines, line)
+	}
+
+	lines := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		lines = append(lines, m.styles.Subtle.Render(raw))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m *Model) renderTabs() string {
+	queued, active, done := m.tabCounts()
+
+	renderTab := func(label string, count int, tab listTab) string {
+		text := fmt.Sprintf(" %s (%d) ", label, count)
+		if m.activeTab == tab {
+			return m.styles.StatusActive.Render(text)
+		}
+		return m.styles.Muted.Render(text)
+	}
+
+	return strings.Join([]string{
+		renderTab("Queued", queued, tabQueued),
+		renderTab("Active", active, tabActive),
+		renderTab("Done", done, tabDone),
+	}, " ")
+}
+
+func (m *Model) renderSearchLine() string {
+	if m.searchActive {
+		return m.searchInput.View()
+	}
+	if m.searchQuery != "" {
+		return m.styles.Subtle.Render("Filter: " + m.searchQuery + "  (press f to clear)")
+	}
+	return m.styles.Subtle.Render("Press f to filter list")
+}
+
+func (m *Model) renderStatsLine() string {
+	queued, active, done := m.tabCounts()
+	visible := len(m.visibleItems())
+	total := len(m.items)
+	speed := humanSpeed(m.aggregateSpeedBps())
+	return m.styles.Subtle.Render(fmt.Sprintf("items %d/%d  queued %d  active %d  done %d  total speed %s", visible, total, queued, active, done, speed))
+}
+
+func (m *Model) renderLogPanel() string {
+	var b strings.Builder
+	b.WriteString(m.styles.Label.Render("Event Log"))
+	b.WriteString("\n")
+	if len(m.logEntries) == 0 {
+		b.WriteString(m.styles.Muted.Render("no log entries yet"))
+		return b.String()
+	}
+
+	maxLines := 8
+	if m.height > 0 {
+		if h := m.height / 5; h > maxLines {
+			maxLines = h
+		}
+		if maxLines > 12 {
+			maxLines = 12
+		}
+	}
+	if maxLines < 4 {
+		maxLines = 4
+	}
+
+	start := m.logCursor - maxLines + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxLines
+	if end > len(m.logEntries) {
+		end = len(m.logEntries)
+	}
+
+	for i := start; i < end; i++ {
+		prefix := "  "
+		if i == m.logCursor {
+			prefix = "> "
+		}
+		line := prefix + m.logEntries[i]
+		if i == m.logCursor {
+			b.WriteString(m.styles.InfoLine.Render(line))
+		} else {
+			b.WriteString(m.styles.Muted.Render(line))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
+	return b.String()
+}
+
+func (m *Model) renderConfirmOverlay(content string) string {
+	msg := "Remove selected download?\n"
+	msg += "This can delete partial files if cleanup is enabled.\n\n"
+	msg += "y/enter confirm   n/esc cancel"
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color(m.theme.Warning)).
+		Background(lipgloss.Color(m.theme.Card)).
+		Padding(1, 2).
+		Render(msg)
+
+	if m.width > 0 && m.height > 0 {
+		overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+		return content + "\n" + overlay
+	}
+	return content + "\n\n" + box
 }
 
 func (m *Model) renderSplash() string {

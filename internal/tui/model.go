@@ -48,6 +48,14 @@ const (
 	addDestinationStep
 )
 
+type listTab int
+
+const (
+	tabQueued listTab = iota
+	tabActive
+	tabDone
+)
+
 type actionResultMsg struct {
 	info string
 	err  error
@@ -111,10 +119,14 @@ type Model struct {
 	screen   screen
 	showHelp bool
 
-	input textinput.Model
+	input         textinput.Model
+	searchInput   textinput.Model
 	settingsInput textinput.Model
-	step  addStep
-	add   addDraft
+	step          addStep
+	add           addDraft
+	activeTab     listTab
+	searchActive  bool
+	searchQuery   string
 
 	message string
 	errMsg  string
@@ -140,6 +152,12 @@ type Model struct {
 	settingsCursor  int
 	settingsEditing bool
 	settingsFields  []settingField
+
+	showLogPanel    bool
+	logCursor       int
+	logEntries      []string
+	removeConfirm   bool
+	pendingRemoveID string
 }
 
 type memoProgress struct {
@@ -173,6 +191,12 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	settingsIn.CharLimit = 256
 	settingsIn.Blur()
 
+	searchIn := textinput.New()
+	searchIn.Prompt = "search> "
+	searchIn.Placeholder = "type to filter by URL/path/ID"
+	searchIn.CharLimit = 256
+	searchIn.Blur()
+
 	m := &Model{
 		ctx:  ctx,
 		mgr:  mgr,
@@ -184,6 +208,7 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 		),
 		screen:          splashScreen,
 		input:           in,
+		searchInput:     searchIn,
 		settingsInput:   settingsIn,
 		theme:           OceanTheme,
 		cleanupOnRemove: true,
@@ -194,6 +219,7 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 		recentDir:       homeDir,
 		browserDir:      homeDir,
 	}
+	m.appendLog("relay started")
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -241,12 +267,7 @@ func (m *Model) refreshSnapshot() {
 		m.selected = 0
 		return
 	}
-	if m.selected >= len(m.items) {
-		m.selected = len(m.items) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
+	m.ensureSelectionVisible()
 }
 
 func (m *Model) applyProgressSmoothing() {
@@ -290,10 +311,11 @@ func (m *Model) applyProgressSmoothing() {
 }
 
 func (m *Model) currentItem() (manager.DownloadRecord, bool) {
-	if len(m.items) == 0 || m.selected < 0 || m.selected >= len(m.items) {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.selected < 0 || m.selected >= len(visible) {
 		return manager.DownloadRecord{}, false
 	}
-	return m.items[m.selected], true
+	return visible[m.selected], true
 }
 
 func (m *Model) applyEvent(ev manager.Event) {
@@ -315,6 +337,95 @@ func (m *Model) applyEvent(ev manager.Event) {
 
 	// For structural events like add/remove/queue changes, fall back to a full refresh.
 	m.refreshSnapshot()
+}
+
+func (m *Model) visibleItems() []manager.DownloadRecord {
+	if len(m.items) == 0 {
+		return nil
+	}
+
+	query := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	out := make([]manager.DownloadRecord, 0, len(m.items))
+	for _, item := range m.items {
+		if !matchesTab(item.Status, m.activeTab) {
+			continue
+		}
+		if query != "" {
+			haystack := strings.ToLower(item.ID + " " + item.URL + " " + item.Destination)
+			if !strings.Contains(haystack, query) {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func matchesTab(status manager.Status, tab listTab) bool {
+	switch tab {
+	case tabQueued:
+		return status == manager.StatusQueued || status == manager.StatusPaused || status == manager.StatusErrored
+	case tabActive:
+		return status == manager.StatusDownloading
+	case tabDone:
+		return status == manager.StatusCompleted
+	default:
+		return true
+	}
+}
+
+func (m *Model) ensureSelectionVisible() {
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		m.selected = 0
+		return
+	}
+	if m.selected >= len(visible) {
+		m.selected = len(visible) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+}
+
+func (m *Model) tabCounts() (queued int, active int, done int) {
+	for _, item := range m.items {
+		switch {
+		case matchesTab(item.Status, tabQueued):
+			queued++
+		case matchesTab(item.Status, tabActive):
+			active++
+		case matchesTab(item.Status, tabDone):
+			done++
+		}
+	}
+	return queued, active, done
+}
+
+func (m *Model) aggregateSpeedBps() float64 {
+	var total float64
+	for _, item := range m.items {
+		if item.Status == manager.StatusDownloading && item.Progress.SpeedBps > 0 {
+			total += item.Progress.SpeedBps
+		}
+	}
+	return total
+}
+
+func (m *Model) appendLog(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
+	line := time.Now().Format("15:04:05") + "  " + entry
+	m.logEntries = append(m.logEntries, line)
+	if len(m.logEntries) > 200 {
+		m.logEntries = m.logEntries[len(m.logEntries)-200:]
+	}
+	m.logCursor = len(m.logEntries) - 1
+	if m.logCursor < 0 {
+		m.logCursor = 0
+	}
 }
 
 func shortID(id string) string {
