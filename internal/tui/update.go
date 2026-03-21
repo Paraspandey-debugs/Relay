@@ -54,26 +54,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.applyEvent(msg)
 		} else {
 			m.refreshSnapshot()
-			m.message = fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID))
-			m.messageUntil = time.Now().Add(4 * time.Second)
-			m.appendLog(fmt.Sprintf("%s %s", msg.Type, shortID(msg.ID)))
+			m.notifyInfo(fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID)))
 		}
 		if msg.Error != "" {
-			m.errMsg = msg.Error
-			m.errUntil = time.Now().Add(8 * time.Second)
-			m.appendLog("error: " + msg.Error)
+			m.notifyError(msg.Error)
 		}
 		return m, nil
 	case actionResultMsg:
 		if msg.err != nil {
-			m.errMsg = msg.err.Error()
-			m.errUntil = time.Now().Add(8 * time.Second)
-			m.appendLog("action failed: " + msg.err.Error())
+			m.notifyError(msg.err.Error())
 			return m, nil
 		}
-		m.message = msg.info
-		m.messageUntil = time.Now().Add(4 * time.Second)
-		m.appendLog(msg.info)
+		m.notifyInfo(msg.info)
 		m.errMsg = ""
 		m.refreshSnapshot()
 		return m, nil
@@ -115,8 +107,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.screen = listScreen
 		m.step = addURLStep
 		m.add = addDraft{}
-		m.message = "add cancelled"
-		m.messageUntil = time.Now().Add(3 * time.Second)
+		m.notifyInfo("add cancelled")
 		return m, nil
 	case m.step == addDestinationStep && key.Matches(msg, m.keys.Up):
 		m.moveBrowser(-1)
@@ -126,8 +117,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case m.step == addDestinationStep && msg.String() == "right":
 		if err := m.browserEnterSelected(); err != nil {
-			m.errMsg = err.Error()
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError(err.Error())
 		}
 		return m, nil
 	case m.step == addDestinationStep && msg.String() == "left":
@@ -139,8 +129,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.String() == "enter":
 		value := strings.TrimSpace(m.input.Value())
 		if value == "" {
-			m.errMsg = "field cannot be empty"
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError("field cannot be empty")
 			return m, nil
 		}
 		if m.step == addURLStep {
@@ -152,8 +141,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.add.dst = value
 		m.recentDir = filepath.Dir(value)
 		if existing, ok := m.mgr.FindDuplicate(m.add.url, m.add.dst); ok {
-			m.errMsg = fmt.Sprintf("duplicate exists: %s", shortID(existing.ID))
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError(fmt.Sprintf("duplicate exists: %s", shortID(existing.ID)))
 			return m, nil
 		}
 		m.input.Blur()
@@ -183,8 +171,7 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Cancel):
 			m.pendingRemoveID = ""
 			m.removeConfirm = false
-			m.message = "remove cancelled"
-			m.messageUntil = time.Now().Add(3 * time.Second)
+			m.notifyInfo("remove cancelled")
 			return m, nil
 		default:
 			return m, nil
@@ -322,8 +309,7 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
 		m.refreshSnapshot()
-		m.message = "refreshed"
-		m.messageUntil = time.Now().Add(3 * time.Second)
+		m.notifyInfo("refreshed")
 		return m, nil
 	default:
 		return m, nil
@@ -343,7 +329,7 @@ func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
 		}
 	}
 	if idx < 0 {
-		m.errMsg = "selected item is not queued"
+		m.notifyError("selected item is not queued")
 		return m, nil
 	}
 	newIdx := idx + delta
@@ -354,4 +340,16 @@ func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
 	q[idx], q[newIdx] = q[newIdx], q[idx]
 	m.queue = q
 	return m, reorderQueueCmd(m.mgr, q)
+}
+
+func (m *Model) notifyError(err string) {
+	m.errMsg = err
+	m.errUntil = time.Now().Add(8 * time.Second)
+	m.appendLog("error: " + err)
+}
+
+func (m *Model) notifyInfo(info string) {
+	m.message = info
+	m.messageUntil = time.Now().Add(4 * time.Second)
+	m.appendLog(info)
 }

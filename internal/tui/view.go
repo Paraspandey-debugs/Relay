@@ -23,22 +23,30 @@ func (m *Model) View() string {
 		return m.renderSettings()
 	}
 
+	// local render helpers to avoid repeating m.styles.X.Render
+	muted := m.styles.Muted.Render
+	info := m.styles.InfoLine.Render
+	errRender := m.styles.ErrorLine.Render
+
 	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Relay"))
+	m.writeln(&b, m.styles.Header, "Relay")
+	// compute derived data once to avoid repeated work and inconsistencies
+	visible := m.visibleItems()
+	queued, active, done := m.tabCounts()
+	total := len(m.items)
+	speed := humanSpeed(m.aggregateSpeedBps())
+
+	b.WriteString(m.renderTabs(queued, active, done))
 	b.WriteString("\n")
-	b.WriteString(m.renderTabs())
-	b.WriteString("\n")
-	b.WriteString(m.renderStatsLine())
+	b.WriteString(m.renderStatsLine(queued, active, done, len(visible), total, speed))
 	b.WriteString("\n")
 	b.WriteString(m.renderSearchLine())
 	b.WriteString("\n\n")
-
-	visible := m.visibleItems()
 	if len(visible) == 0 {
 		if m.searchQuery != "" {
-			b.WriteString(m.styles.Muted.Render("No downloads match the current filter."))
+			b.WriteString(muted("No downloads match the current filter."))
 		} else {
-			b.WriteString(m.styles.Muted.Render("No downloads in this tab. Press 'a' to add one."))
+			b.WriteString(muted("No downloads in this tab. Press 'a' to add one."))
 		}
 		b.WriteString("\n\n")
 	} else {
@@ -64,10 +72,10 @@ func (m *Model) View() string {
 	}
 
 	if m.errMsg != "" {
-		b.WriteString(m.styles.ErrorLine.Render("error: " + m.errMsg))
+		b.WriteString(errRender("error: " + m.errMsg))
 		b.WriteString("\n")
 	} else if m.message != "" {
-		b.WriteString(m.styles.InfoLine.Render("info: " + m.message))
+		b.WriteString(info("info: " + m.message))
 		b.WriteString("\n")
 	}
 
@@ -79,6 +87,11 @@ func (m *Model) View() string {
 		return m.renderConfirmOverlay(main)
 	}
 	return main
+}
+
+func (m *Model) writeln(b *strings.Builder, style lipgloss.Style, msg string) {
+	b.WriteString(style.Render(msg))
+	b.WriteString("\n")
 }
 
 func (m *Model) renderHelpBlock() string {
@@ -149,9 +162,7 @@ func (m *Model) renderGuideEntries(entries []string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) renderTabs() string {
-	queued, active, done := m.tabCounts()
-
+func (m *Model) renderTabs(queued, active, done int) string {
 	renderTab := func(label string, count int, tab listTab) string {
 		text := fmt.Sprintf(" %s (%d) ", label, count)
 		if m.activeTab == tab {
@@ -177,20 +188,15 @@ func (m *Model) renderSearchLine() string {
 	return m.styles.Subtle.Render("Press f to filter list")
 }
 
-func (m *Model) renderStatsLine() string {
-	queued, active, done := m.tabCounts()
-	visible := len(m.visibleItems())
-	total := len(m.items)
-	speed := humanSpeed(m.aggregateSpeedBps())
+func (m *Model) renderStatsLine(queued, active, done, visible, total int, speed string) string {
 	return m.styles.Subtle.Render(fmt.Sprintf("items %d/%d  queued %d  active %d  done %d  total speed %s", visible, total, queued, active, done, speed))
 }
 
 func (m *Model) renderLogPanel() string {
 	var b strings.Builder
-	b.WriteString(m.styles.Label.Render("Event Log"))
-	b.WriteString("\n")
+	m.writeln(&b, m.styles.Label, "Event Log")
 	if len(m.logEntries) == 0 {
-		b.WriteString(m.styles.Muted.Render("no log entries yet"))
+		m.writeln(&b, m.styles.Muted, "no log entries yet")
 		return b.String()
 	}
 
@@ -223,11 +229,10 @@ func (m *Model) renderLogPanel() string {
 		}
 		line := prefix + m.logEntries[i]
 		if i == m.logCursor {
-			b.WriteString(m.styles.InfoLine.Render(line))
+			m.writeln(&b, m.styles.InfoLine, line)
 		} else {
-			b.WriteString(m.styles.Muted.Render(line))
+			m.writeln(&b, m.styles.Muted, line)
 		}
-		b.WriteString("\n")
 	}
 	b.WriteString(m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
 	return b.String()
@@ -265,44 +270,36 @@ func (m *Model) renderSplash() string {
 
 func (m *Model) renderAddInput() string {
 	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Add Download"))
+	m.writeln(&b, m.styles.Header, "Add Download")
+	m.writeln(&b, m.styles.Subtle, "Enter details and press Enter to continue, Esc to cancel.")
 	b.WriteString("\n")
-	b.WriteString(m.styles.Subtle.Render("Enter details and press Enter to continue, Esc to cancel."))
-	b.WriteString("\n\n")
 
 	label := "Source URL"
 	if m.step == addDestinationStep {
 		label = "Destination Path"
 	}
-	b.WriteString(m.styles.Label.Render(label))
-	b.WriteString("\n")
+	m.writeln(&b, m.styles.Label, label)
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 	if m.step == addDestinationStep {
 		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(fmt.Sprintf("URL: %s", m.add.url)))
+		m.writeln(&b, m.styles.Muted, fmt.Sprintf("URL: %s", m.add.url))
+		m.writeln(&b, m.styles.Muted, fmt.Sprintf("Recent directory: %s", m.recentDir))
 		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(fmt.Sprintf("Recent directory: %s", m.recentDir)))
-		b.WriteString("\n\n")
-		b.WriteString(m.styles.Label.Render("Directory Tree"))
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(m.browserPathLabel()))
-		b.WriteString("\n")
+		m.writeln(&b, m.styles.Label, "Directory Tree")
+		m.writeln(&b, m.styles.Muted, m.browserPathLabel())
 		for i, entry := range m.visibleBrowserEntries() {
 			absoluteIndex := m.browserOffset + i
 			prefix := "  "
 			if absoluteIndex == m.browserSelected {
 				prefix = "> "
 			}
-			b.WriteString(m.styles.Muted.Render(prefix + entry.name + "/"))
-			b.WriteString("\n")
+			m.writeln(&b, m.styles.Muted, prefix+entry.name+"/")
 		}
 		if len(m.browserEntries) == 0 {
-			b.WriteString(m.styles.Muted.Render("(no subdirectories)"))
-			b.WriteString("\n")
+			m.writeln(&b, m.styles.Muted, "(no subdirectories)")
 		} else {
-			b.WriteString(m.styles.Subtle.Render(m.browserPaginationLabel()))
-			b.WriteString("\n")
+			m.writeln(&b, m.styles.Subtle, m.browserPaginationLabel())
 		}
 		b.WriteString("\n")
 		b.WriteString(m.styles.Subtle.Render(m.browserHint()))
@@ -315,44 +312,65 @@ func (m *Model) renderAddInput() string {
 }
 
 func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) string {
-	bar := m.progress.ViewAs(progressRatio(item.Progress))
+	width := m.width
+	if width == 0 {
+		width = 80 // fallback
+	}
+
+	// 1. Format the data
+	filename := item.Destination
+	if filename == "" {
+		filename = item.URL
+	}
 	status := m.statusPill(item.Status)
-	meta := ""
+
+	var metrics string
 	if item.Status == manager.StatusCompleted {
-		meta = fmt.Sprintf(
-			"%s  %s  %s/%s  completed in %s",
-			shortID(item.ID),
-			status,
-			humanBytes(item.Progress.Downloaded),
-			totalLabel(item.Progress.Total),
-			humanDuration(completedDuration(item)),
-		)
+		metrics = fmt.Sprintf("%s / %s • %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanDuration(completedDuration(item)))
 	} else {
-		meta = fmt.Sprintf(
-			"%s  %s  %s/%s  %s  ETA %s",
-			shortID(item.ID),
-			status,
-			humanBytes(item.Progress.Downloaded),
-			totalLabel(item.Progress.Total),
-			humanSpeed(item.Progress.SpeedBps),
-			humanETA(item.Progress.ETA),
-		)
+		metrics = fmt.Sprintf("%s / %s • %s • ETA %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanSpeed(item.Progress.SpeedBps), humanETA(item.Progress.ETA))
 	}
 
-	fileLine := item.Destination
-	if item.Destination == "" {
-		fileLine = item.URL
-	}
-
-	block := m.styles.DownloadCard.Render(
-		m.styles.CardTitle.Render(fileLine) + "\n" +
-			m.styles.Muted.Render(meta) + "\n" +
-			bar,
-	)
+	// 2. Build the top row (Filename <-----> Status)
+	titleStyle := m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
 	if selected {
-		return m.styles.SelectedCard.Render(block)
+		titleStyle = titleStyle.Foreground(lipgloss.Color(m.theme.Accent))
 	}
-	return block
+	left := titleStyle.Render(filename)
+	right := status
+
+	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if spacerWidth < 1 {
+		spacerWidth = 1
+	}
+	spacer := lipgloss.NewStyle().Width(spacerWidth).Render("")
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
+
+	// 3. Build the bottom row (Progress Bar <-----> Metrics)
+	metricsRendered := m.styles.Muted.Render(metrics)
+	progWidth := width - lipgloss.Width(metricsRendered) - 4
+	if progWidth < 10 {
+		progWidth = 10
+	}
+	m.progress.Width = progWidth
+	bar := m.progress.ViewAs(progressRatio(item.Progress))
+
+	spacer2Width := width - lipgloss.Width(bar) - lipgloss.Width(metricsRendered)
+	if spacer2Width < 1 {
+		spacer2Width = 1
+	}
+	spacer2 := lipgloss.NewStyle().Width(spacer2Width).Render("")
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, bar, spacer2, metricsRendered)
+
+	// 4. Combine into a card
+	card := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
+
+	paddingStyle := lipgloss.NewStyle().Padding(0, 1)
+	if selected {
+		paddingStyle = paddingStyle.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color(m.theme.Accent))
+	}
+
+	return paddingStyle.Render(card)
 }
 
 func (m *Model) renderQueue() string {
@@ -363,23 +381,23 @@ func (m *Model) renderQueue() string {
 	for i, id := range m.queue {
 		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
 	}
-	return m.styles.Label.Render("Queue") + "\n" + strings.Join(parts, "  ")
+	var b strings.Builder
+	m.writeln(&b, m.styles.Label, "Queue")
+	b.WriteString(strings.Join(parts, "  "))
+	return b.String()
 }
 
 func (m *Model) renderSelected(item manager.DownloadRecord) string {
 	var b strings.Builder
-	b.WriteString(m.styles.Label.Render("Selected"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.Muted.Render("ID: "+item.ID) + "\n")
-	b.WriteString(m.styles.Muted.Render("URL: "+item.URL) + "\n")
-	b.WriteString(m.styles.Muted.Render("Path: " + item.Destination))
+	m.writeln(&b, m.styles.Label, "Selected")
+	m.writeln(&b, m.styles.Muted, "ID: "+item.ID)
+	m.writeln(&b, m.styles.Muted, "URL: "+item.URL)
+	m.writeln(&b, m.styles.Muted, "Path: "+item.Destination)
 	if item.Status == manager.StatusCompleted {
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render("Completed in: " + humanDuration(completedDuration(item))))
+		m.writeln(&b, m.styles.Muted, "Completed in: "+humanDuration(completedDuration(item)))
 	}
 	if item.Error != "" {
-		b.WriteString("\n")
-		b.WriteString(m.styles.ErrorLine.Render("Last error: " + item.Error))
+		m.writeln(&b, m.styles.ErrorLine, "Last error: "+item.Error)
 	}
 	return b.String()
 }
