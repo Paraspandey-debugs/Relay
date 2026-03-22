@@ -8,7 +8,6 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -58,6 +57,19 @@ const (
 	tabDone
 )
 
+func matchesTab(status manager.Status, tab listTab) bool {
+	switch tab {
+	case tabQueued:
+		return status == manager.StatusQueued || status == manager.StatusPaused || status == manager.StatusErrored
+	case tabActive:
+		return status == manager.StatusDownloading
+	case tabDone:
+		return status == manager.StatusCompleted
+	default:
+		return true
+	}
+}
+
 type actionResultMsg struct {
 	info string
 	err  error
@@ -106,12 +118,9 @@ type Model struct {
 	ctx context.Context
 	mgr *manager.Manager
 
-	items []manager.DownloadRecord
-	queue []string
-
-	selected int
-	width    int
-	height   int
+	// items, queue, selected removed – now delegated to jobsList
+	width  int
+	height int
 
 	keys keyMap
 	help help.Model
@@ -126,7 +135,6 @@ type Model struct {
 	settingsInput textinput.Model
 	step          addStep
 	add           addDraft
-	activeTab     listTab
 	searchActive  bool
 	searchQuery   string
 
@@ -140,6 +148,7 @@ type Model struct {
 	styles styles
 	now    time.Time
 
+	// progress smoothing state
 	cleanupOnRemove   bool
 	defaultAddOptions download.Options
 	tickEvery         time.Duration
@@ -236,6 +245,11 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	m.stats = NewStatsComponent(m.theme, m.styles)
 	m.syncBrowserTo(m.recentDir)
 
+	// Load initial state into jobs list component
+	m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: mgr.List(), queue: mgr.Queue()})
+	m.jobsList.SetTab(tabQueued)
+	m.syncStats()
+
 	// Apply explicit backgrounds to text inputs to prevent terminal default bleed
 	inBg := lipgloss.Color(m.theme.Background)
 	inFg := lipgloss.Color(m.theme.Foreground)
@@ -247,7 +261,6 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	m.input.TextStyle, m.input.PromptStyle, m.input.Cursor.Style = inStyle, promptStyle, promptStyle
 	m.searchInput.TextStyle, m.searchInput.PromptStyle, m.searchInput.Cursor.Style = inStyle, promptStyle, promptStyle
 	m.settingsInput.TextStyle, m.settingsInput.PromptStyle, m.settingsInput.Cursor.Style = inStyle, promptStyle, promptStyle
-	m.refreshSnapshot()
 	return m
 }
 
@@ -277,160 +290,22 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(textinput.Blink, tickCmd(m.tickEvery), splashDoneCmd(startupSplashDuration))
 }
 
-func (m *Model) refreshSnapshot() {
-	m.items = m.mgr.List()
-	m.queue = m.mgr.Queue()
-	m.applyProgressSmoothing()
-	sort.Slice(m.items, func(i, j int) bool {
-		return m.items[i].CreatedAt.Before(m.items[j].CreatedAt)
-	})
-	if len(m.items) == 0 {
-		m.selected = 0
-		return
-	}
-	m.ensureSelectionVisible()
-}
-
-func (m *Model) applyProgressSmoothing() {
-	now := time.Now()
-	for i := range m.items {
-		m.smoothSingleItem(&m.items[i], now)
-	}
-}
-
-func (m *Model) smoothSingleItem(it *manager.DownloadRecord, now time.Time) {
-	memo, ok := m.progressMemo[it.ID]
-	if !ok || now.Sub(memo.At) > 5*time.Second {
-		return
-	}
-
-	if it.Progress.SpeedBps > 0 {
-		memo.SpeedBps = it.Progress.SpeedBps
-		memo.At = now
-	}
-	if it.Progress.ETA > 0 {
-		memo.ETA = it.Progress.ETA
-		memo.At = now
-	}
-
-	if it.Status == manager.StatusDownloading {
-		if it.Progress.SpeedBps <= 0 && memo.SpeedBps > 0 {
-			it.Progress.SpeedBps = memo.SpeedBps
-		}
-		if it.Progress.ETA <= 0 && memo.ETA > 0 {
-			it.Progress.ETA = memo.ETA
-		}
-		if it.Progress.ETA <= 0 && it.Progress.Total > it.Progress.Downloaded && it.Progress.SpeedBps > 0 {
-			remaining := float64(it.Progress.Total-it.Progress.Downloaded) / it.Progress.SpeedBps
-			if remaining > 0 {
-				it.Progress.ETA = time.Duration(remaining * float64(time.Second))
-			}
-		}
-	}
-
-	m.progressMemo[it.ID] = memo
+// New helper to update stats from the jobs list component
+func (m *Model) syncStats() {
+	total := m.jobsList.GetTotal()
+	queued := m.jobsList.GetQueued()
+	active := m.jobsList.GetActive()
+	done := m.jobsList.GetDone()
+	speed := m.jobsList.GetAggregateSpeed()
+	m.stats.UpdateStats(total, queued, active, done, speed)
 }
 
 func (m *Model) currentItem() (manager.DownloadRecord, bool) {
-	visible := m.visibleItems()
-	if len(visible) == 0 || m.selected < 0 || m.selected >= len(visible) {
+	job := m.jobsList.SelectedJob()
+	if job == nil {
 		return manager.DownloadRecord{}, false
 	}
-	return visible[m.selected], true
-}
-
-func (m *Model) applyEvent(ev manager.Event) {
-	for i := range m.items {
-		if m.items[i].ID != ev.ID {
-			continue
-		}
-		m.items[i].Status = ev.Status
-		if ev.Progress != nil {
-			m.items[i].Progress = *ev.Progress
-		}
-		if ev.Error != "" {
-			m.items[i].Error = ev.Error
-		}
-		m.items[i].UpdatedAt = ev.At
-		m.smoothSingleItem(&m.items[i], time.Now())
-		return
-	}
-
-	// For structural events like add/remove/queue changes, fall back to a full refresh.
-	m.refreshSnapshot()
-}
-
-func (m *Model) visibleItems() []manager.DownloadRecord {
-	if len(m.items) == 0 {
-		return nil
-	}
-
-	query := strings.ToLower(strings.TrimSpace(m.searchQuery))
-	out := make([]manager.DownloadRecord, 0, len(m.items))
-	for _, item := range m.items {
-		if !matchesTab(item.Status, m.activeTab) {
-			continue
-		}
-		if query != "" {
-			haystack := strings.ToLower(item.ID + " " + item.URL + " " + item.Destination)
-			if !strings.Contains(haystack, query) {
-				continue
-			}
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-func matchesTab(status manager.Status, tab listTab) bool {
-	switch tab {
-	case tabQueued:
-		return status == manager.StatusQueued || status == manager.StatusPaused || status == manager.StatusErrored
-	case tabActive:
-		return status == manager.StatusDownloading
-	case tabDone:
-		return status == manager.StatusCompleted
-	default:
-		return true
-	}
-}
-
-func (m *Model) ensureSelectionVisible() {
-	visible := m.visibleItems()
-	if len(visible) == 0 {
-		m.selected = 0
-		return
-	}
-	if m.selected >= len(visible) {
-		m.selected = len(visible) - 1
-	}
-	if m.selected < 0 {
-		m.selected = 0
-	}
-}
-
-func (m *Model) tabCounts() (queued int, active int, done int) {
-	for _, item := range m.items {
-		switch {
-		case matchesTab(item.Status, tabQueued):
-			queued++
-		case matchesTab(item.Status, tabActive):
-			active++
-		case matchesTab(item.Status, tabDone):
-			done++
-		}
-	}
-	return queued, active, done
-}
-
-func (m *Model) aggregateSpeedBps() float64 {
-	var total float64
-	for _, item := range m.items {
-		if item.Status == manager.StatusDownloading && item.Progress.SpeedBps > 0 {
-			total += item.Progress.SpeedBps
-		}
-	}
-	return total
+	return *job, true
 }
 
 func (m *Model) appendLog(entry string) {

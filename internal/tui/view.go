@@ -13,7 +13,12 @@ import (
 
 func (m *Model) View() string {
 	if m.screen == splashScreen {
-		return lipgloss.NewStyle().Background(lipgloss.Color(m.theme.Background)).Foreground(lipgloss.Color(m.theme.Foreground)).Width(m.width).Height(m.height).Render(m.renderSplash())
+		return lipgloss.NewStyle().
+			Background(lipgloss.Color(m.theme.Background)).
+			Foreground(lipgloss.Color(m.theme.Foreground)).
+			Width(m.width).
+			Height(m.height).
+			Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderSplash()))
 	}
 
 	var content string
@@ -28,15 +33,16 @@ func (m *Model) View() string {
 		m.details, _ = m.details.Update(JobSelectedMsg(sel))
 
 		// Top pane / Header
-		header := m.stats.HeaderView()
+		headerLines := []string{m.stats.HeaderView()}
 		if m.searchActive {
-			header += m.searchInput.View() + "\n"
+			headerLines = append(headerLines, m.searchInput.View())
 		} else if m.jobsList.searchQuery != "" {
-			header += m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)") + "\n"
+			headerLines = append(headerLines, m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)"))
 		}
+		header := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
 
 		// Bottom Stats
-		m.stats.UpdateStats(len(m.jobsList.jobs), len(m.jobsList.queue), m.stats.active, m.stats.done, m.aggregateSpeedBps())
+		m.stats.UpdateStats(m.jobsList.GetTotal(), m.jobsList.GetQueued(), m.jobsList.GetActive(), m.jobsList.GetDone(), m.jobsList.GetAggregateSpeed())
 		footer := m.stats.View()
 
 		// Add Log Panel if requested
@@ -97,17 +103,26 @@ func (m *Model) View() string {
 			Height(availHeight).
 			Render(mainSplit)
 
-		mainContent := lipgloss.JoinVertical(lipgloss.Left, header, mainBody, footer)
-
+		mainLines := []string{header, mainBody, footer}
 		if m.errMsg != "" {
-			mainContent += "\n" + m.styles.ErrorLine.Render("error: "+m.errMsg)
+			mainLines = append(mainLines, m.styles.ErrorLine.Render("error: "+m.errMsg))
 		} else if m.message != "" {
-			mainContent += "\n" + m.styles.InfoLine.Render("info: "+m.message)
+			mainLines = append(mainLines, m.styles.InfoLine.Render("info: "+m.message))
 		}
-		content = mainContent
+		content = lipgloss.JoinVertical(lipgloss.Left, mainLines...)
 	}
 
-	main := m.styles.App.Width(m.width).Height(m.height).Render(content)
+	innerW := m.width - 4
+	innerH := m.height - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+	if innerH < 1 {
+		innerH = 1
+	}
+
+	placed := lipgloss.Place(innerW, innerH, lipgloss.Left, lipgloss.Top, content)
+	main := m.styles.App.Width(m.width).Height(m.height).Render(placed)
 	if m.removeConfirm {
 		return m.renderConfirmOverlay(main)
 	}

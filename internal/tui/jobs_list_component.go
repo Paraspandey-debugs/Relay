@@ -215,7 +215,7 @@ func (m JobsListComponent) View() string {
 	b.WriteString("\n")
 	b.WriteString(queueView)
 
-	out := m.styles.LeftPane.Width(m.width).MaxHeight(m.height).Render(b.String())
+	out := m.styles.LeftPane.Width(m.width).Height(m.height).Render(b.String())
 	return out
 }
 
@@ -245,18 +245,29 @@ func (m JobsListComponent) renderTabs() string {
 			done++
 		}
 	}
-	return renderTab("Queued", queued, tabQueued) + renderTab("Active", active, tabActive) + renderTab("Done", done, tabDone)
+	row := renderTab("Queued", queued, tabQueued) + renderTab("Active", active, tabActive) + renderTab("Done", done, tabDone)
+	lineWidth := m.width - 4
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.theme.Card)).Width(lineWidth).Render(row)
 }
 
 func (m JobsListComponent) renderQueue() string {
+	lineWidth := m.width - 4
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
 	if len(m.queue) == 0 {
-		return m.styles.CardMuted.Render("Queue: empty")
+		return m.styles.CardMuted.Copy().Width(lineWidth).Render("Queue: empty")
 	}
 	parts := make([]string, 0, len(m.queue))
 	for i, id := range m.queue {
 		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
 	}
-	return m.styles.CardLabel.Render("Queue") + "\n" + m.styles.CardMuted.Render(strings.Join(parts, "  "))
+	label := m.styles.CardLabel.Copy().Width(lineWidth).Render("Queue")
+	body := m.styles.CardMuted.Copy().Width(lineWidth).Render(strings.Join(parts, "  "))
+	return lipgloss.JoinVertical(lipgloss.Left, label, body)
 }
 
 func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool) string {
@@ -278,9 +289,11 @@ func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool)
 	}
 
 	var titleStyle, mutedStyle lipgloss.Style
+	spacerBg := lipgloss.Color(m.theme.Card)
 	if selected {
 		titleStyle = m.styles.SelectedCardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
 		mutedStyle = m.styles.SelectedCardMuted
+		spacerBg = lipgloss.Color(m.theme.SelectedCard)
 	} else {
 		titleStyle = m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
 		mutedStyle = m.styles.CardMuted
@@ -292,7 +305,7 @@ func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool)
 	if spacerWidth < 1 {
 		spacerWidth = 1
 	}
-	spacer := lipgloss.NewStyle().Width(spacerWidth).Render("")
+	spacer := lipgloss.NewStyle().Background(spacerBg).Width(spacerWidth).Render("")
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
 
 	metricsRendered := mutedStyle.Render(metrics)
@@ -308,7 +321,7 @@ func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool)
 	if spacer2Width < 1 {
 		spacer2Width = 1
 	}
-	spacer2 := lipgloss.NewStyle().Width(spacer2Width).Render("")
+	spacer2 := lipgloss.NewStyle().Background(spacerBg).Width(spacer2Width).Render("")
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, bar, spacer2, metricsRendered)
 
 	card := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
@@ -342,4 +355,58 @@ func statusPill(s manager.Status, st styles) string {
 type updateFullStateMsg struct {
 	items []manager.DownloadRecord
 	queue []string
+}
+
+// GetTotal returns the total number of jobs.
+func (m JobsListComponent) GetTotal() int {
+	return len(m.jobs)
+}
+
+// GetQueued returns the number of jobs that are queued, paused, or errored.
+func (m JobsListComponent) GetQueued() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabQueued) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetActive returns the number of jobs that are downloading.
+func (m JobsListComponent) GetActive() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabActive) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetDone returns the number of completed jobs.
+func (m JobsListComponent) GetDone() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabDone) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetAggregateSpeed returns the sum of download speeds of active jobs.
+func (m JobsListComponent) GetAggregateSpeed() float64 {
+	var total float64
+	for _, job := range m.jobs {
+		if job.Status == manager.StatusDownloading && job.Progress.SpeedBps > 0 {
+			total += job.Progress.SpeedBps
+		}
+	}
+	return total
+}
+
+// Queue returns the current queue order.
+func (m JobsListComponent) Queue() []string {
+	return m.queue
 }

@@ -72,15 +72,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.progressMemo[msg.ID] = memo
 		}
-		if msg.Type == manager.EventProgress {
-			m.applyEvent(msg)
-		} else {
-			m.refreshSnapshot()
+		// Non-progress structural events: refresh jobs list snapshot
+		if msg.Type != manager.EventProgress {
+			m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
 			m.notifyInfo(fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID)))
 		}
 		if msg.Error != "" {
 			m.notifyError(msg.Error)
 		}
+		m.syncStats()
 		return m, nil
 	case actionResultMsg:
 		if msg.err != nil {
@@ -89,7 +89,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notifyInfo(msg.info)
 		m.errMsg = ""
-		m.refreshSnapshot()
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
 		return m, nil
 	case tickMsg:
 		m.now = time.Time(msg)
@@ -329,7 +330,8 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openSettings()
 		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
-		m.refreshSnapshot()
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
 		m.notifyInfo("refreshed")
 		return m, nil
 	default:
@@ -342,8 +344,9 @@ func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	q := m.jobsList.Queue()
 	idx := -1
-	for i, id := range m.queue {
+	for i, id := range q {
 		if id == item.ID {
 			idx = i
 			break
@@ -354,13 +357,12 @@ func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	newIdx := idx + delta
-	if newIdx < 0 || newIdx >= len(m.queue) {
+	if newIdx < 0 || newIdx >= len(q) {
 		return m, nil
 	}
-	q := append([]string(nil), m.queue...)
-	q[idx], q[newIdx] = q[newIdx], q[idx]
-	m.queue = q
-	return m, reorderQueueCmd(m.mgr, q)
+	nq := append([]string(nil), q...)
+	nq[idx], nq[newIdx] = nq[newIdx], nq[idx]
+	return m, reorderQueueCmd(m.mgr, nq)
 }
 
 func (m *Model) notifyError(err string) {

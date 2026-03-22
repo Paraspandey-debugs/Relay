@@ -42,44 +42,53 @@ func (m DetailComponent) Update(msg tea.Msg) (DetailComponent, tea.Cmd) {
 }
 
 func (m DetailComponent) View() string {
+	lineWidth := m.width - 2
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+
 	if m.job == nil {
-		return m.styles.RightPane.Width(m.width).Height(m.height).Render(m.styles.CardMuted.Render("No active selection."))
+		empty := m.styles.CardMuted.Copy().Width(lineWidth).Render("No active selection.")
+		return m.styles.RightPane.Width(m.width).Height(m.height).Render(empty)
 	}
 
 	item := *m.job
 
-	wrap := lipgloss.NewStyle().Width(m.width - 4)
+	wrapWidth := lineWidth
+	if wrapWidth < 12 {
+		wrapWidth = 12
+	}
+	wrap := lipgloss.NewStyle().Width(wrapWidth)
 
-	title := m.styles.CardLabel.Render("Detailed Overview")
-	id := m.styles.CardMuted.Render("ID:   " + item.ID)
+	title := m.styles.CardLabel.Copy().Width(lineWidth).Render("Detailed Overview")
+	id := m.styles.CardMuted.Copy().Width(lineWidth).Render("ID:   " + item.ID)
 	url := m.styles.CardMuted.Render(wrap.Render("URL:  " + item.URL))
 	path := m.styles.CardMuted.Render(wrap.Render("Path: " + item.Destination))
-	status := "\n" + m.styles.CardMuted.Render("Status: ") + statusPill(item.Status, m.styles) + "\n"
+	statusLine := lipgloss.JoinHorizontal(lipgloss.Top, m.styles.CardMuted.Render("Status: "), statusPill(item.Status, m.styles))
+	status := m.styles.CardMuted.Copy().Width(lineWidth).Render(statusLine)
 
-	var details string
+	var detailLines []string
 	if item.Status == manager.StatusDownloading {
-		details = lipgloss.JoinVertical(lipgloss.Left,
-			m.styles.CardMuted.Render(fmt.Sprintf("Progress: %s / %s (%s)", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), progressPercent(item.Progress))),
-			m.styles.CardMuted.Render(fmt.Sprintf("Speed:    %s", humanSpeed(item.Progress.SpeedBps))),
-			m.styles.CardMuted.Render(fmt.Sprintf("ETA:      %s", humanETA(item.Progress.ETA))),
-		)
+		detailLines = []string{
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Progress: %s / %s (%s)", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), progressPercent(item.Progress))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Speed:    %s", humanSpeed(item.Progress.SpeedBps))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("ETA:      %s", humanETA(item.Progress.ETA))),
+		}
 	} else if item.Status == manager.StatusCompleted {
-		details = lipgloss.JoinVertical(lipgloss.Left,
-			m.styles.CardMuted.Render(fmt.Sprintf("Completed:  %s", totalLabel(item.Progress.Total))),
-			m.styles.CardMuted.Render(fmt.Sprintf("Time taken: %s", humanDuration(completedDuration(item)))),
-		)
+		detailLines = []string{
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Completed:  %s", totalLabel(item.Progress.Total))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Time taken: %s", humanDuration(completedDuration(item)))),
+		}
 	}
 
-	var errStr string
+	lines := []string{title, id, url, path, status}
+	lines = append(lines, detailLines...)
+
 	if item.Error != "" {
-		errStr = "\n" + m.styles.CardError.Render(wrap.Render("Error: "+item.Error))
+		lines = append(lines, m.styles.CardError.Copy().Width(lineWidth).Render(wrap.Render("Error: "+item.Error)))
 	}
 
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title, id, url, path, status, details, errStr,
-	)
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	return m.styles.RightPane.Width(m.width).Height(m.height).Render(
-		lipgloss.NewStyle().Padding(1).Render(content),
-	)
+	return m.styles.RightPane.Width(m.width).Height(m.height).Render(content)
 }

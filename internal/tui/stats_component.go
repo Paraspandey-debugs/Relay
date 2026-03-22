@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -60,17 +59,18 @@ func (m StatsComponent) View() string {
 		muted("done"), m.done,
 		muted("throughput"), accent(humanSpeed(m.speed)))
 
-	return m.styles.FooterCard.Width(m.width).Render(stats)
+	if m.width > 0 {
+		return m.styles.FooterCard.Width(m.width).Render(stats)
+	}
+	return m.styles.FooterCard.Render(stats)
 }
 
 func (m StatsComponent) HeaderView() string {
 	left := m.styles.Header.Render("Relay Dashboard")
 	subtle := m.styles.Subtle.Render("Production Mode")
-	gap := m.width - lipgloss.Width(left) - lipgloss.Width(subtle)
-	if gap < 0 {
-		gap = 0
+	if m.width > 0 {
+		row := lipgloss.JoinHorizontal(lipgloss.Top, left, subtle)
+		return lipgloss.PlaceHorizontal(m.width, lipgloss.Left, row)
 	}
-	spacer := strings.Repeat(" ", gap)
-
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, subtle) + "\n"
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", subtle)
 }
