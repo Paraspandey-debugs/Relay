@@ -13,100 +13,101 @@ import (
 
 func (m *Model) View() string {
 	if m.screen == splashScreen {
-		return m.renderSplash()
+		return lipgloss.NewStyle().Background(lipgloss.Color(m.theme.Background)).Foreground(lipgloss.Color(m.theme.Foreground)).Width(m.width).Height(m.height).Render(m.renderSplash())
 	}
 
+	var content string
 	if m.screen == addScreen {
-		return m.renderAddInput()
+		content = m.renderAddInput()
+	} else if m.screen == settingsScreen {
+		content = m.renderSettings()
+	} else {
+
+		// Route selection to Detail component via message
+		sel := m.jobsList.SelectedJob()
+		m.details, _ = m.details.Update(JobSelectedMsg(sel))
+
+		// Top pane / Header
+		header := m.stats.HeaderView()
+		if m.searchActive {
+			header += m.searchInput.View() + "\n"
+		} else if m.jobsList.searchQuery != "" {
+			header += m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)") + "\n"
+		}
+
+		// Bottom Stats
+		m.stats.UpdateStats(len(m.jobsList.jobs), len(m.jobsList.queue), m.stats.active, m.stats.done, m.aggregateSpeedBps())
+		footer := m.stats.View()
+
+		// Add Log Panel if requested
+		if m.showLogPanel {
+			logView := m.renderLogPanel()
+			footer = logView + "\n" + footer
+		}
+
+		appPaddingVert := 2 // m.styles.App has Padding(1, 2)
+		// account for horizontal padding (left + right). Padding(1,2) => 2 each side = 4 total
+		appPaddingHoriz := 4
+		usedHeight := lipgloss.Height(header) + lipgloss.Height(footer) + appPaddingVert
+		if m.errMsg != "" {
+			usedHeight += 2
+		} else if m.message != "" {
+			usedHeight += 2
+		}
+		availHeight := m.height - usedHeight
+		if availHeight < 5 {
+			availHeight = 5
+		}
+
+		// Compute inner width available to the two columns after App horizontal padding
+		innerWidth := m.width - appPaddingHoriz
+		if innerWidth <= 0 {
+			innerWidth = m.width
+		}
+		leftOuterWidth := innerWidth / 2
+		rightOuterWidth := innerWidth - leftOuterWidth
+
+		// LeftPane/RightPane each have border + horizontal padding = 4 columns.
+		// Components receive content width; styles add the chrome.
+		const paneChromeHoriz = 4
+		leftContentWidth := leftOuterWidth - paneChromeHoriz
+		rightContentWidth := rightOuterWidth - paneChromeHoriz
+		if leftContentWidth < 12 {
+			leftContentWidth = 12
+		}
+		if rightContentWidth < 12 {
+			rightContentWidth = 12
+		}
+
+		m.jobsList.SetSize(leftContentWidth, availHeight)
+		// send window size to detail component so it updates its internal width/height
+		m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
+
+		// Dash Layout Main
+		mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.jobsList.View(),
+			m.details.View(),
+		)
+
+		// Wrap the two panes in a card-area background so there are no uncolored gaps.
+		// Width keeps any odd leftover column painted with the card color.
+		mainBody := lipgloss.NewStyle().
+			Background(lipgloss.Color(m.theme.Card)).
+			Width(innerWidth).
+			Height(availHeight).
+			Render(mainSplit)
+
+		mainContent := lipgloss.JoinVertical(lipgloss.Left, header, mainBody, footer)
+
+		if m.errMsg != "" {
+			mainContent += "\n" + m.styles.ErrorLine.Render("error: "+m.errMsg)
+		} else if m.message != "" {
+			mainContent += "\n" + m.styles.InfoLine.Render("info: "+m.message)
+		}
+		content = mainContent
 	}
 
-	if m.screen == settingsScreen {
-		return m.renderSettings()
-	}
-
-	// Route selection to Detail component via message
-	sel := m.jobsList.SelectedJob()
-	m.details, _ = m.details.Update(JobSelectedMsg(sel))
-
-	// Top pane / Header
-	header := m.stats.HeaderView()
-	if m.searchActive {
-		header += m.searchInput.View() + "\n"
-	} else if m.jobsList.searchQuery != "" {
-		header += m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)") + "\n"
-	}
-
-	// Bottom Stats
-	m.stats.UpdateStats(len(m.jobsList.jobs), len(m.jobsList.queue), m.stats.active, m.stats.done, m.aggregateSpeedBps())
-	footer := m.stats.View()
-
-	// Add Log Panel if requested
-	if m.showLogPanel {
-		logView := m.renderLogPanel()
-		footer = logView + "\n" + footer
-	}
-
-	appPaddingVert := 2 // m.styles.App has Padding(1, 2)
-	// account for horizontal padding (left + right). Padding(1,2) => 2 each side = 4 total
-	appPaddingHoriz := 4
-	usedHeight := lipgloss.Height(header) + lipgloss.Height(footer) + appPaddingVert
-	if m.errMsg != "" {
-		usedHeight += 2
-	} else if m.message != "" {
-		usedHeight += 2
-	}
-	availHeight := m.height - usedHeight
-	if availHeight < 5 {
-		availHeight = 5
-	}
-
-	// Compute inner width available to the two columns after App horizontal padding
-	innerWidth := m.width - appPaddingHoriz
-	if innerWidth <= 0 {
-		innerWidth = m.width
-	}
-	leftOuterWidth := innerWidth / 2
-	rightOuterWidth := innerWidth - leftOuterWidth
-
-	// LeftPane/RightPane each have border + horizontal padding = 4 columns.
-	// Components receive content width; styles add the chrome.
-	const paneChromeHoriz = 4
-	leftContentWidth := leftOuterWidth - paneChromeHoriz
-	rightContentWidth := rightOuterWidth - paneChromeHoriz
-	if leftContentWidth < 12 {
-		leftContentWidth = 12
-	}
-	if rightContentWidth < 12 {
-		rightContentWidth = 12
-	}
-
-	m.jobsList.SetSize(leftContentWidth, availHeight)
-	// send window size to detail component so it updates its internal width/height
-	m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
-
-	// Dash Layout Main
-	mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.jobsList.View(),
-		m.details.View(),
-	)
-
-	// Wrap the two panes in a card-area background so there are no uncolored gaps.
-	// Width keeps any odd leftover column painted with the card color.
-	mainBody := lipgloss.NewStyle().
-		Background(lipgloss.Color(m.theme.Card)).
-		Width(innerWidth).
-		Height(availHeight).
-		Render(mainSplit)
-
-	mainContent := lipgloss.JoinVertical(lipgloss.Left, header, mainBody, footer)
-
-	if m.errMsg != "" {
-		mainContent += "\n" + m.styles.ErrorLine.Render("error: "+m.errMsg)
-	} else if m.message != "" {
-		mainContent += "\n" + m.styles.InfoLine.Render("info: "+m.message)
-	}
-
-	main := m.styles.App.Render(mainContent)
+	main := m.styles.App.Width(m.width).Height(m.height).Render(content)
 	if m.removeConfirm {
 		return m.renderConfirmOverlay(main)
 	}
@@ -185,48 +186,7 @@ func (m *Model) renderGuideEntries(entries []string, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) renderTabs(queued, active, done int) string {
-	renderTab := func(label string, count int, tab listTab) string {
-		text := fmt.Sprintf(" %s (%d) ", label, count)
-		if m.activeTab == tab {
-			return m.styles.StatusActive.Copy().MarginRight(1).Render(text)
-		}
-		inactiveStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(m.theme.Foreground)).
-			Background(lipgloss.Color(m.theme.SelectedCard)).
-			Padding(0, 1).
-			MarginRight(1)
-		return inactiveStyle.Render(text)
-	}
-
-	return strings.Join([]string{
-		renderTab("Queued", queued, tabQueued),
-		renderTab("Active", active, tabActive),
-		renderTab("Done", done, tabDone),
-	}, "")
-}
-
-func (m *Model) renderSearchLine() string {
-	if m.searchActive {
-		return m.searchInput.View()
-	}
-	if m.searchQuery != "" {
-		return m.styles.Subtle.Render("Filter: " + m.searchQuery + "  (press f to clear)")
-	}
-	return m.styles.Subtle.Render("Press f to filter list")
-}
-
-func (m *Model) renderStatsLine(queued, active, done, visible, total int, speed string) string {
-	muted := m.styles.Muted.Render
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Render
-
-	return fmt.Sprintf("%s %d/%d   %s %d   %s %d   %s %d   %s %s",
-		muted("items"), visible, total,
-		muted("queued"), queued,
-		muted("active"), active,
-		muted("done"), done,
-		muted("speed"), accent(speed))
-}
+// Dead legacy rendering helpers removed: tabs/search/stats are handled by components.
 
 func (m *Model) renderLogPanel() string {
 	var lines []string
@@ -346,125 +306,10 @@ func (m *Model) renderAddInput() string {
 	if m.errMsg != "" {
 		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg))
 	}
-	return m.styles.App.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) string {
-	width := m.width
-	if width == 0 {
-		width = 80 // fallback
-	}
-	width -= 8 // account for structural padding and borders
-	if width < 30 {
-		width = 30
-	}
-
-	// 1. Format the data
-	filename := item.Destination
-	if filename == "" {
-		filename = item.URL
-	}
-	status := m.statusPill(item.Status)
-
-	var metrics string
-	if item.Status == manager.StatusCompleted {
-		metrics = fmt.Sprintf("%s / %s • %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanDuration(completedDuration(item)))
-	} else {
-		metrics = fmt.Sprintf("%s / %s • %s • ETA %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanSpeed(item.Progress.SpeedBps), humanETA(item.Progress.ETA))
-	}
-
-	// 2. Build the top row (Filename <-----> Status)
-	titleStyle := m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
-	if selected {
-		titleStyle = titleStyle.Foreground(lipgloss.Color(m.theme.Accent))
-	}
-	left := titleStyle.Render(filename)
-	right := status
-
-	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if spacerWidth < 1 {
-		spacerWidth = 1
-	}
-	spacer := lipgloss.NewStyle().Width(spacerWidth).Render("")
-	topRow := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
-
-	// 3. Build the bottom row (Progress Bar <-----> Metrics)
-	metricsRendered := m.styles.Muted.Render(metrics)
-	progWidth := width - lipgloss.Width(metricsRendered) - 4
-	if progWidth < 10 {
-		progWidth = 10
-	}
-	m.progress.Width = progWidth
-	bar := m.progress.ViewAs(progressRatio(item.Progress))
-
-	spacer2Width := width - lipgloss.Width(bar) - lipgloss.Width(metricsRendered)
-	if spacer2Width < 1 {
-		spacer2Width = 1
-	}
-	spacer2 := lipgloss.NewStyle().Width(spacer2Width).Render("")
-	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, bar, spacer2, metricsRendered)
-
-	// 4. Combine into a card
-	card := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
-
-	if selected {
-		return m.styles.SelectedCard.MarginBottom(1).Render(card)
-	}
-	return m.styles.DownloadCard.MarginBottom(1).Render(card)
-}
-
-func (m *Model) renderQueue() string {
-	if len(m.queue) == 0 {
-		return m.styles.Muted.Render("Queue: empty")
-	}
-	parts := make([]string, 0, len(m.queue))
-	for i, id := range m.queue {
-		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
-	}
-	return lipgloss.JoinVertical(lipgloss.Left,
-		m.styles.Label.Render("Queue"),
-		strings.Join(parts, "  "),
-	)
-}
-
-func (m *Model) renderSelected(item manager.DownloadRecord) string {
-	title := m.styles.Label.Render("Preview Detail")
-	id := m.styles.Muted.Render("ID:   " + item.ID)
-	url := m.styles.Muted.Render("URL:  " + item.URL)
-	path := m.styles.Muted.Render("Path: " + item.Destination)
-
-	status := "\nStatus: " + m.statusPill(item.Status) + "\n"
-
-	var details string
-	if item.Status == manager.StatusDownloading {
-		details = lipgloss.JoinVertical(lipgloss.Left,
-			m.styles.Muted.Render(fmt.Sprintf("Progress: %s / %s (%s)", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), progressPercent(item.Progress))),
-			m.styles.Muted.Render(fmt.Sprintf("Speed:    %s", humanSpeed(item.Progress.SpeedBps))),
-			m.styles.Muted.Render(fmt.Sprintf("ETA:      %s", humanETA(item.Progress.ETA))),
-		)
-	} else if item.Status == manager.StatusCompleted {
-		details = lipgloss.JoinVertical(lipgloss.Left,
-			m.styles.Muted.Render(fmt.Sprintf("Completed:  %s", totalLabel(item.Progress.Total))),
-			m.styles.Muted.Render(fmt.Sprintf("Time taken: %s", humanDuration(completedDuration(item)))),
-		)
-	}
-
-	var errStr string
-	if item.Error != "" {
-		errStr = "\n" + m.styles.ErrorLine.Render("Error: "+item.Error)
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		title, id, url, path, status, details, errStr,
-	)
-
-	return lipgloss.NewStyle().
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color(m.theme.SelectedCard)).
-		PaddingTop(1).
-		Render(content)
-}
+// Legacy per-row/detail/queue rendering removed — JobsListComponent and DetailComponent handle these.
 
 func completedDuration(item manager.DownloadRecord) time.Duration {
 	if item.ActiveFor > 0 {
@@ -485,21 +330,7 @@ func completedDuration(item manager.DownloadRecord) time.Duration {
 	return 0
 }
 
-func (m *Model) statusPill(s manager.Status) string {
-	text := statusLabel(s)
-	switch s {
-	case manager.StatusCompleted:
-		return m.styles.StatusDone.Render(text)
-	case manager.StatusDownloading:
-		return m.styles.StatusActive.Render(text)
-	case manager.StatusPaused:
-		return m.styles.StatusPaused.Render(text)
-	case manager.StatusErrored:
-		return m.styles.StatusError.Render(text)
-	default:
-		return m.styles.StatusQueued.Render(text)
-	}
-}
+// statusPill removed from view.go; components use their own rendering helpers.
 
 func progressRatio(p manager.ProgressInfo) float64 {
 	if p.Total <= 0 {

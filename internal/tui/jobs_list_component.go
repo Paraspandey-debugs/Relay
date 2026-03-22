@@ -178,7 +178,7 @@ func (m JobsListComponent) View() string {
 	}
 
 	if len(vis) == 0 {
-		b.WriteString(m.styles.Muted.Render("No downloads in this tab. Press 'a' to add."))
+		b.WriteString(m.styles.CardMuted.Render("No downloads in this tab. Press 'a' to add."))
 	} else {
 		// Calculate slice bounds to keep selected in view
 		start := 0
@@ -203,11 +203,11 @@ func (m JobsListComponent) View() string {
 		}
 
 		if start > 0 {
-			b.WriteString(m.styles.Muted.Render(fmt.Sprintf("...and %d above", start)))
+			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d above", start)))
 			b.WriteString("\n")
 		}
 		if end < len(vis) {
-			b.WriteString(m.styles.Muted.Render(fmt.Sprintf("...and %d below", len(vis)-end)))
+			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d below", len(vis)-end)))
 			b.WriteString("\n")
 		}
 	}
@@ -250,13 +250,13 @@ func (m JobsListComponent) renderTabs() string {
 
 func (m JobsListComponent) renderQueue() string {
 	if len(m.queue) == 0 {
-		return m.styles.Muted.Render("Queue: empty")
+		return m.styles.CardMuted.Render("Queue: empty")
 	}
 	parts := make([]string, 0, len(m.queue))
 	for i, id := range m.queue {
 		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
 	}
-	return m.styles.Label.Render("Queue") + "\n" + strings.Join(parts, "  ")
+	return m.styles.CardLabel.Render("Queue") + "\n" + m.styles.CardMuted.Render(strings.Join(parts, "  "))
 }
 
 func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool) string {
@@ -277,9 +277,13 @@ func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool)
 		metrics = fmt.Sprintf("%s / %s • %s • ETA %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanSpeed(item.Progress.SpeedBps), humanETA(item.Progress.ETA))
 	}
 
-	titleStyle := m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
+	var titleStyle, mutedStyle lipgloss.Style
 	if selected {
-		titleStyle = titleStyle.Foreground(lipgloss.Color(m.theme.Accent))
+		titleStyle = m.styles.SelectedCardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
+		mutedStyle = m.styles.SelectedCardMuted
+	} else {
+		titleStyle = m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
+		mutedStyle = m.styles.CardMuted
 	}
 	left := titleStyle.Render(filename)
 	right := status
@@ -291,7 +295,7 @@ func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool)
 	spacer := lipgloss.NewStyle().Width(spacerWidth).Render("")
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
 
-	metricsRendered := m.styles.Muted.Render(metrics)
+	metricsRendered := mutedStyle.Render(metrics)
 	progWidth := width - lipgloss.Width(metricsRendered) - 4
 	if progWidth < 10 {
 		progWidth = 10

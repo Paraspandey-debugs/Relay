@@ -263,7 +263,7 @@ func (m *Model) renderSettings() string {
 		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg), "")
 	}
 
-	return m.styles.App.Render(strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }
 
 // handleSettingsKeys processes key events on the settings screen.

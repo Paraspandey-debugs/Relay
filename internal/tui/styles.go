@@ -137,37 +137,40 @@ func ApplyThemeOverrides(base Theme, overrides map[string]string) Theme {
 }
 
 type styles struct {
-	App             lipgloss.Style
-	Header          lipgloss.Style
-	Subtle          lipgloss.Style
-	Label           lipgloss.Style
-	Muted           lipgloss.Style
-	CardLabel       lipgloss.Style
-	CardMuted       lipgloss.Style
-	CardInfo        lipgloss.Style
-	CardError       lipgloss.Style
-	FooterCard      lipgloss.Style
-	FooterTitle     lipgloss.Style
-	DownloadCard    lipgloss.Style
-	SelectedCard    lipgloss.Style
-	CardTitle       lipgloss.Style
-	InfoLine        lipgloss.Style
-	ErrorLine       lipgloss.Style
-	StatusDone      lipgloss.Style
-	StatusActive    lipgloss.Style
-	StatusPaused    lipgloss.Style
-	StatusError     lipgloss.Style
-	StatusQueued    lipgloss.Style
-	StatusStarting  lipgloss.Style
-	StatusStopping  lipgloss.Style
-	StatusVerifying lipgloss.Style
-	LeftPane        lipgloss.Style
-	RightPane       lipgloss.Style
+	App               lipgloss.Style
+	Header            lipgloss.Style
+	Subtle            lipgloss.Style
+	Label             lipgloss.Style
+	Muted             lipgloss.Style
+	CardLabel         lipgloss.Style
+	CardMuted         lipgloss.Style
+	CardInfo          lipgloss.Style
+	CardError         lipgloss.Style
+	FooterCard        lipgloss.Style
+	FooterTitle       lipgloss.Style
+	DownloadCard      lipgloss.Style
+	SelectedCard      lipgloss.Style
+	CardTitle         lipgloss.Style
+	SelectedCardTitle lipgloss.Style
+	SelectedCardMuted lipgloss.Style
+	InfoLine          lipgloss.Style
+	ErrorLine         lipgloss.Style
+	StatusDone        lipgloss.Style
+	StatusActive      lipgloss.Style
+	StatusPaused      lipgloss.Style
+	StatusError       lipgloss.Style
+	StatusQueued      lipgloss.Style
+	StatusStarting    lipgloss.Style
+	StatusStopping    lipgloss.Style
+	StatusVerifying   lipgloss.Style
+	LeftPane          lipgloss.Style
+	RightPane         lipgloss.Style
 }
 
 func newStyles(t Theme) styles {
 	bg := lipgloss.Color(t.Background)
 	cardBg := lipgloss.Color(t.Card)
+	selCardBg := lipgloss.Color(t.SelectedCard)
 
 	return styles{
 		App: lipgloss.NewStyle().
@@ -213,7 +216,15 @@ func newStyles(t Theme) styles {
 			Padding(0, 0),
 		CardTitle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Foreground)).
+			Background(cardBg).
 			Bold(true),
+		SelectedCardTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Accent)).
+			Background(selCardBg).
+			Bold(true),
+		SelectedCardMuted: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Muted)).
+			Background(selCardBg),
 		InfoLine: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)).Background(bg),
 		ErrorLine: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Error)).

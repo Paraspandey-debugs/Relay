@@ -43,7 +43,7 @@ func (m DetailComponent) Update(msg tea.Msg) (DetailComponent, tea.Cmd) {
 
 func (m DetailComponent) View() string {
 	if m.job == nil {
-		return m.styles.RightPane.Width(m.width).Height(m.height).Render(m.styles.Muted.Render("No active selection."))
+		return m.styles.RightPane.Width(m.width).Height(m.height).Render(m.styles.CardMuted.Render("No active selection."))
 	}
 
 	item := *m.job
@@ -54,7 +54,7 @@ func (m DetailComponent) View() string {
 	id := m.styles.CardMuted.Render("ID:   " + item.ID)
 	url := m.styles.CardMuted.Render(wrap.Render("URL:  " + item.URL))
 	path := m.styles.CardMuted.Render(wrap.Render("Path: " + item.Destination))
-	status := "\nStatus: " + statusPill(item.Status, m.styles) + "\n"
+	status := "\n" + m.styles.CardMuted.Render("Status: ") + statusPill(item.Status, m.styles) + "\n"
 
 	var details string
 	if item.Status == manager.StatusDownloading {
