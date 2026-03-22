@@ -23,47 +23,62 @@ type Theme struct {
 
 var OceanTheme = Theme{
 	Name:         "ocean",
-	Background:   "#0A0E1A",
-	Foreground:   "#D9E2F2",
-	Accent:       "#5BD1D7",
-	Secondary:    "#4F8EF7",
-	Success:      "#3DDC97",
-	Warning:      "#F4C95D",
-	Error:        "#FF5D73",
-	Muted:        "#8FA7C7",
-	Header:       "#7FD1FF",
-	Card:         "#111A2E",
-	SelectedCard: "#1C2E52",
+	Background:   "#0D1117",
+	Foreground:   "#E6EDF3",
+	Accent:       "#58A6FF",
+	Secondary:    "#1F6FEB",
+	Success:      "#3FB950",
+	Warning:      "#D29922",
+	Error:        "#F85149",
+	Muted:        "#8B949E",
+	Header:       "#58A6FF",
+	Card:         "#161B22",
+	SelectedCard: "#21262D",
 }
 
 var SunsetTheme = Theme{
 	Name:         "sunset",
-	Background:   "#1A0F0A",
-	Foreground:   "#FFE8D6",
-	Accent:       "#F39C6B",
-	Secondary:    "#FFD166",
-	Success:      "#7AE582",
-	Warning:      "#F6BD60",
-	Error:        "#FF6B6B",
-	Muted:        "#C3A995",
-	Header:       "#FFAF87",
-	Card:         "#2A1912",
-	SelectedCard: "#3B2419",
+	Background:   "#1C1210",
+	Foreground:   "#F2D7D0",
+	Accent:       "#FF7A59",
+	Secondary:    "#D95A40",
+	Success:      "#52C463",
+	Warning:      "#E6923C",
+	Error:        "#E84A5F",
+	Muted:        "#9E827B",
+	Header:       "#FFA28B",
+	Card:         "#2B1C19",
+	SelectedCard: "#3D2A26",
 }
 
 var MonoTheme = Theme{
 	Name:         "mono",
-	Background:   "#121212",
-	Foreground:   "#F5F5F5",
-	Accent:       "#B0BEC5",
-	Secondary:    "#90A4AE",
-	Success:      "#A5D6A7",
-	Warning:      "#FFE082",
-	Error:        "#EF9A9A",
-	Muted:        "#BDBDBD",
-	Header:       "#ECEFF1",
-	Card:         "#1E1E1E",
-	SelectedCard: "#2A2A2A",
+	Background:   "#0A0A0A",
+	Foreground:   "#FAFAFA",
+	Accent:       "#E0E0E0",
+	Secondary:    "#737373",
+	Success:      "#A3E635",
+	Warning:      "#FBBF24",
+	Error:        "#F87171",
+	Muted:        "#525252",
+	Header:       "#FFFFFF",
+	Card:         "#171717",
+	SelectedCard: "#262626",
+}
+
+var SurgeTheme = Theme{
+	Name:         "surge",
+	Background:   "#1A1B26",
+	Foreground:   "#C0CAF5",
+	Accent:       "#7AA2F7",
+	Secondary:    "#414868",
+	Success:      "#9ECE6A",
+	Warning:      "#E0AF68",
+	Error:        "#F7768E",
+	Muted:        "#565F89",
+	Header:       "#BB9AF7",
+	Card:         "#24283B",
+	SelectedCard: "#2E3247",
 }
 
 func ThemeByName(name string) (Theme, bool) {
@@ -74,6 +89,8 @@ func ThemeByName(name string) (Theme, bool) {
 		return SunsetTheme, true
 	case "mono":
 		return MonoTheme, true
+	case "surge":
+		return SurgeTheme, true
 	default:
 		return Theme{}, false
 	}
@@ -120,26 +137,38 @@ func ApplyThemeOverrides(base Theme, overrides map[string]string) Theme {
 }
 
 type styles struct {
-	App          lipgloss.Style
-	Header       lipgloss.Style
-	Subtle       lipgloss.Style
-	Label        lipgloss.Style
-	Muted        lipgloss.Style
-	FooterCard   lipgloss.Style
-	FooterTitle  lipgloss.Style
-	DownloadCard lipgloss.Style
-	SelectedCard lipgloss.Style
-	CardTitle    lipgloss.Style
-	InfoLine     lipgloss.Style
-	ErrorLine    lipgloss.Style
-	StatusDone   lipgloss.Style
-	StatusActive lipgloss.Style
-	StatusPaused lipgloss.Style
-	StatusError  lipgloss.Style
-	StatusQueued lipgloss.Style
+	App             lipgloss.Style
+	Header          lipgloss.Style
+	Subtle          lipgloss.Style
+	Label           lipgloss.Style
+	Muted           lipgloss.Style
+	CardLabel       lipgloss.Style
+	CardMuted       lipgloss.Style
+	CardInfo        lipgloss.Style
+	CardError       lipgloss.Style
+	FooterCard      lipgloss.Style
+	FooterTitle     lipgloss.Style
+	DownloadCard    lipgloss.Style
+	SelectedCard    lipgloss.Style
+	CardTitle       lipgloss.Style
+	InfoLine        lipgloss.Style
+	ErrorLine       lipgloss.Style
+	StatusDone      lipgloss.Style
+	StatusActive    lipgloss.Style
+	StatusPaused    lipgloss.Style
+	StatusError     lipgloss.Style
+	StatusQueued    lipgloss.Style
+	StatusStarting  lipgloss.Style
+	StatusStopping  lipgloss.Style
+	StatusVerifying lipgloss.Style
+	LeftPane        lipgloss.Style
+	RightPane       lipgloss.Style
 }
 
 func newStyles(t Theme) styles {
+	bg := lipgloss.Color(t.Background)
+	cardBg := lipgloss.Color(t.Card)
+
 	return styles{
 		App: lipgloss.NewStyle().
 			Background(lipgloss.Color(t.Background)).
@@ -147,56 +176,85 @@ func newStyles(t Theme) styles {
 			Padding(1, 2),
 		Header: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Header)).
+			Background(bg).
 			Bold(true),
-		Subtle: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)),
+		Subtle: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(bg),
 		Label: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Accent)).
+			Background(bg).
 			Bold(true),
-		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)),
+		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(bg),
+
+		// Card-context styles (for use inside LeftPane/RightPane)
+		CardLabel: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent)).Background(cardBg).Bold(true),
+		CardMuted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(cardBg),
+		CardInfo:  lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)).Background(cardBg),
+		CardError: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Error)).Background(cardBg).Bold(true),
+
 		FooterCard: lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color(t.Secondary)).
-			Background(lipgloss.Color(t.Card)).
-			Padding(0, 1),
+			BorderTop(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			PaddingTop(1),
 		FooterTitle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Accent)).
 			Bold(true),
 		DownloadCard: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color(t.Secondary)).
+			BorderBackground(lipgloss.Color(t.Card)).
 			Background(lipgloss.Color(t.Card)).
 			Padding(0, 1),
 		SelectedCard: lipgloss.NewStyle().
 			Border(lipgloss.ThickBorder()).
 			BorderForeground(lipgloss.Color(t.Accent)).
+			BorderBackground(lipgloss.Color(t.SelectedCard)).
 			Background(lipgloss.Color(t.SelectedCard)).
 			Padding(0, 0),
 		CardTitle: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Foreground)).
 			Bold(true),
-		InfoLine: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)),
+		InfoLine: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)).Background(bg),
 		ErrorLine: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Error)).
+			Background(bg).
 			Bold(true),
 		StatusDone: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Background)).
 			Background(lipgloss.Color(t.Success)).
-			Bold(true),
+			Bold(true).
+			Padding(0, 1),
 		StatusActive: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Background)).
 			Background(lipgloss.Color(t.Accent)).
-			Bold(true),
+			Bold(true).
+			Padding(0, 1),
 		StatusPaused: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Background)).
 			Background(lipgloss.Color(t.Warning)).
-			Bold(true),
+			Bold(true).
+			Padding(0, 1),
 		StatusError: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Background)).
 			Background(lipgloss.Color(t.Error)).
-			Bold(true),
+			Bold(true).
+			Padding(0, 1),
 		StatusQueued: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(t.Background)).
 			Background(lipgloss.Color(t.Secondary)).
-			Bold(true),
+			Bold(true).
+			Padding(0, 1),
+		LeftPane: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			BorderBackground(lipgloss.Color(t.Card)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(1, 1),
+		RightPane: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			BorderBackground(lipgloss.Color(t.Card)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(1, 1),
 	}
 }

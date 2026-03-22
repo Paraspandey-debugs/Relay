@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
@@ -23,76 +24,96 @@ func (m *Model) View() string {
 		return m.renderSettings()
 	}
 
-	// local render helpers to avoid repeating m.styles.X.Render
-	muted := m.styles.Muted.Render
-	info := m.styles.InfoLine.Render
-	errRender := m.styles.ErrorLine.Render
+	// Route selection to Detail component via message
+	sel := m.jobsList.SelectedJob()
+	m.details, _ = m.details.Update(JobSelectedMsg(sel))
 
-	var b strings.Builder
-	m.writeln(&b, m.styles.Header, "Relay")
-	// compute derived data once to avoid repeated work and inconsistencies
-	visible := m.visibleItems()
-	queued, active, done := m.tabCounts()
-	total := len(m.items)
-	speed := humanSpeed(m.aggregateSpeedBps())
-
-	b.WriteString(m.renderTabs(queued, active, done))
-	b.WriteString("\n")
-	b.WriteString(m.renderStatsLine(queued, active, done, len(visible), total, speed))
-	b.WriteString("\n")
-	b.WriteString(m.renderSearchLine())
-	b.WriteString("\n\n")
-	if len(visible) == 0 {
-		if m.searchQuery != "" {
-			b.WriteString(muted("No downloads match the current filter."))
-		} else {
-			b.WriteString(muted("No downloads in this tab. Press 'a' to add one."))
-		}
-		b.WriteString("\n\n")
-	} else {
-		for i, item := range visible {
-			selected := i == m.selected
-			b.WriteString(m.renderDownloadRow(item, selected))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
+	// Top pane / Header
+	header := m.stats.HeaderView()
+	if m.searchActive {
+		header += m.searchInput.View() + "\n"
+	} else if m.jobsList.searchQuery != "" {
+		header += m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)") + "\n"
 	}
 
-	b.WriteString(m.renderQueue())
-	b.WriteString("\n")
+	// Bottom Stats
+	m.stats.UpdateStats(len(m.jobsList.jobs), len(m.jobsList.queue), m.stats.active, m.stats.done, m.aggregateSpeedBps())
+	footer := m.stats.View()
+
+	// Add Log Panel if requested
 	if m.showLogPanel {
-		b.WriteString("\n")
-		b.WriteString(m.renderLogPanel())
-		b.WriteString("\n")
+		logView := m.renderLogPanel()
+		footer = logView + "\n" + footer
 	}
 
-	if item, ok := m.currentItem(); ok {
-		b.WriteString(m.renderSelected(item))
-		b.WriteString("\n")
+	appPaddingVert := 2 // m.styles.App has Padding(1, 2)
+	// account for horizontal padding (left + right). Padding(1,2) => 2 each side = 4 total
+	appPaddingHoriz := 4
+	usedHeight := lipgloss.Height(header) + lipgloss.Height(footer) + appPaddingVert
+	if m.errMsg != "" {
+		usedHeight += 2
+	} else if m.message != "" {
+		usedHeight += 2
 	}
+	availHeight := m.height - usedHeight
+	if availHeight < 5 {
+		availHeight = 5
+	}
+
+	// Compute inner width available to the two columns after App horizontal padding
+	innerWidth := m.width - appPaddingHoriz
+	if innerWidth <= 0 {
+		innerWidth = m.width
+	}
+	leftOuterWidth := innerWidth / 2
+	rightOuterWidth := innerWidth - leftOuterWidth
+
+	// LeftPane/RightPane each have border + horizontal padding = 4 columns.
+	// Components receive content width; styles add the chrome.
+	const paneChromeHoriz = 4
+	leftContentWidth := leftOuterWidth - paneChromeHoriz
+	rightContentWidth := rightOuterWidth - paneChromeHoriz
+	if leftContentWidth < 12 {
+		leftContentWidth = 12
+	}
+	if rightContentWidth < 12 {
+		rightContentWidth = 12
+	}
+
+	m.jobsList.SetSize(leftContentWidth, availHeight)
+	// send window size to detail component so it updates its internal width/height
+	m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
+
+	// Dash Layout Main
+	mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
+		m.jobsList.View(),
+		m.details.View(),
+	)
+
+	// Wrap the two panes in a card-area background so there are no uncolored gaps.
+	// Width keeps any odd leftover column painted with the card color.
+	mainBody := lipgloss.NewStyle().
+		Background(lipgloss.Color(m.theme.Card)).
+		Width(innerWidth).
+		Height(availHeight).
+		Render(mainSplit)
+
+	mainContent := lipgloss.JoinVertical(lipgloss.Left, header, mainBody, footer)
 
 	if m.errMsg != "" {
-		b.WriteString(errRender("error: " + m.errMsg))
-		b.WriteString("\n")
+		mainContent += "\n" + m.styles.ErrorLine.Render("error: "+m.errMsg)
 	} else if m.message != "" {
-		b.WriteString(info("info: " + m.message))
-		b.WriteString("\n")
+		mainContent += "\n" + m.styles.InfoLine.Render("info: "+m.message)
 	}
 
-	b.WriteString("\n")
-	b.WriteString(m.renderHelpBlock())
-
-	main := m.styles.App.Render(b.String())
+	main := m.styles.App.Render(mainContent)
 	if m.removeConfirm {
 		return m.renderConfirmOverlay(main)
 	}
 	return main
 }
 
-func (m *Model) writeln(b *strings.Builder, style lipgloss.Style, msg string) {
-	b.WriteString(style.Render(msg))
-	b.WriteString("\n")
-}
+// removed writeln helper — use explicit slices and lipgloss.JoinVertical in renderers
 
 func (m *Model) renderHelpBlock() string {
 	availableWidth := 72
@@ -112,7 +133,9 @@ func (m *Model) renderHelpBlock() string {
 	body := m.styles.FooterTitle.Render("Guide") + "\n" + guideText
 	return m.styles.FooterCard.MaxWidth(availableWidth).Render(body)
 }
-
+func (m *Model) renderHeader() string {
+	return m.styles.Header.Render("Relay")
+}
 func (m *Model) shortGuideEntries() []string {
 	return []string{
 		"1/2/3 tab", "tab next", "f filter", "l log", "a add", "p pause", "r resume", "x remove", "ctrl+q quit",
@@ -166,16 +189,21 @@ func (m *Model) renderTabs(queued, active, done int) string {
 	renderTab := func(label string, count int, tab listTab) string {
 		text := fmt.Sprintf(" %s (%d) ", label, count)
 		if m.activeTab == tab {
-			return m.styles.StatusActive.Render(text)
+			return m.styles.StatusActive.Copy().MarginRight(1).Render(text)
 		}
-		return m.styles.Muted.Render(text)
+		inactiveStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.theme.Foreground)).
+			Background(lipgloss.Color(m.theme.SelectedCard)).
+			Padding(0, 1).
+			MarginRight(1)
+		return inactiveStyle.Render(text)
 	}
 
 	return strings.Join([]string{
 		renderTab("Queued", queued, tabQueued),
 		renderTab("Active", active, tabActive),
 		renderTab("Done", done, tabDone),
-	}, " ")
+	}, "")
 }
 
 func (m *Model) renderSearchLine() string {
@@ -189,15 +217,24 @@ func (m *Model) renderSearchLine() string {
 }
 
 func (m *Model) renderStatsLine(queued, active, done, visible, total int, speed string) string {
-	return m.styles.Subtle.Render(fmt.Sprintf("items %d/%d  queued %d  active %d  done %d  total speed %s", visible, total, queued, active, done, speed))
+	muted := m.styles.Muted.Render
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Render
+
+	return fmt.Sprintf("%s %d/%d   %s %d   %s %d   %s %d   %s %s",
+		muted("items"), visible, total,
+		muted("queued"), queued,
+		muted("active"), active,
+		muted("done"), done,
+		muted("speed"), accent(speed))
 }
 
 func (m *Model) renderLogPanel() string {
-	var b strings.Builder
-	m.writeln(&b, m.styles.Label, "Event Log")
+	var lines []string
+	lines = append(lines, m.styles.Label.Render("Event Log"))
+
 	if len(m.logEntries) == 0 {
-		m.writeln(&b, m.styles.Muted, "no log entries yet")
-		return b.String()
+		lines = append(lines, m.styles.Muted.Render("no log entries yet"))
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
 
 	maxLines := 8
@@ -229,13 +266,13 @@ func (m *Model) renderLogPanel() string {
 		}
 		line := prefix + m.logEntries[i]
 		if i == m.logCursor {
-			m.writeln(&b, m.styles.InfoLine, line)
+			lines = append(lines, m.styles.InfoLine.Render(line))
 		} else {
-			m.writeln(&b, m.styles.Muted, line)
+			lines = append(lines, m.styles.Muted.Render(line))
 		}
 	}
-	b.WriteString(m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
-	return b.String()
+	lines = append(lines, m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
 func (m *Model) renderConfirmOverlay(content string) string {
@@ -269,52 +306,57 @@ func (m *Model) renderSplash() string {
 }
 
 func (m *Model) renderAddInput() string {
-	var b strings.Builder
-	m.writeln(&b, m.styles.Header, "Add Download")
-	m.writeln(&b, m.styles.Subtle, "Enter details and press Enter to continue, Esc to cancel.")
-	b.WriteString("\n")
+	var lines []string
+	lines = append(lines,
+		m.styles.Header.Render("Add Download"),
+		m.styles.Subtle.Render("Enter details and press Enter to continue, Esc to cancel."),
+		"",
+	)
 
 	label := "Source URL"
 	if m.step == addDestinationStep {
 		label = "Destination Path"
 	}
-	m.writeln(&b, m.styles.Label, label)
-	b.WriteString(m.input.View())
-	b.WriteString("\n")
+	lines = append(lines, m.styles.Label.Render(label), m.input.View())
+
 	if m.step == addDestinationStep {
-		b.WriteString("\n")
-		m.writeln(&b, m.styles.Muted, fmt.Sprintf("URL: %s", m.add.url))
-		m.writeln(&b, m.styles.Muted, fmt.Sprintf("Recent directory: %s", m.recentDir))
-		b.WriteString("\n")
-		m.writeln(&b, m.styles.Label, "Directory Tree")
-		m.writeln(&b, m.styles.Muted, m.browserPathLabel())
+		lines = append(lines,
+			"",
+			m.styles.Muted.Render(fmt.Sprintf("URL: %s", m.add.url)),
+			m.styles.Muted.Render(fmt.Sprintf("Recent directory: %s", m.recentDir)),
+			"",
+			m.styles.Label.Render("Directory Tree"),
+			m.styles.Muted.Render(m.browserPathLabel()),
+		)
 		for i, entry := range m.visibleBrowserEntries() {
 			absoluteIndex := m.browserOffset + i
 			prefix := "  "
 			if absoluteIndex == m.browserSelected {
 				prefix = "> "
 			}
-			m.writeln(&b, m.styles.Muted, prefix+entry.name+"/")
+			lines = append(lines, m.styles.Muted.Render(prefix+entry.name+"/"))
 		}
 		if len(m.browserEntries) == 0 {
-			m.writeln(&b, m.styles.Muted, "(no subdirectories)")
+			lines = append(lines, m.styles.Muted.Render("(no subdirectories)"))
 		} else {
-			m.writeln(&b, m.styles.Subtle, m.browserPaginationLabel())
+			lines = append(lines, m.styles.Subtle.Render(m.browserPaginationLabel()))
 		}
-		b.WriteString("\n")
-		b.WriteString(m.styles.Subtle.Render(m.browserHint()))
+		lines = append(lines, "", m.styles.Subtle.Render(m.browserHint()))
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n")
-		b.WriteString(m.styles.ErrorLine.Render("error: " + m.errMsg))
+		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg))
 	}
-	return m.styles.App.Render(b.String())
+	return m.styles.App.Render(lipgloss.JoinVertical(lipgloss.Left, lines...))
 }
 
 func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) string {
 	width := m.width
 	if width == 0 {
 		width = 80 // fallback
+	}
+	width -= 8 // account for structural padding and borders
+	if width < 30 {
+		width = 30
 	}
 
 	// 1. Format the data
@@ -365,12 +407,10 @@ func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) st
 	// 4. Combine into a card
 	card := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
 
-	paddingStyle := lipgloss.NewStyle().Padding(0, 1)
 	if selected {
-		paddingStyle = paddingStyle.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(lipgloss.Color(m.theme.Accent))
+		return m.styles.SelectedCard.MarginBottom(1).Render(card)
 	}
-
-	return paddingStyle.Render(card)
+	return m.styles.DownloadCard.MarginBottom(1).Render(card)
 }
 
 func (m *Model) renderQueue() string {
@@ -381,25 +421,49 @@ func (m *Model) renderQueue() string {
 	for i, id := range m.queue {
 		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
 	}
-	var b strings.Builder
-	m.writeln(&b, m.styles.Label, "Queue")
-	b.WriteString(strings.Join(parts, "  "))
-	return b.String()
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.styles.Label.Render("Queue"),
+		strings.Join(parts, "  "),
+	)
 }
 
 func (m *Model) renderSelected(item manager.DownloadRecord) string {
-	var b strings.Builder
-	m.writeln(&b, m.styles.Label, "Selected")
-	m.writeln(&b, m.styles.Muted, "ID: "+item.ID)
-	m.writeln(&b, m.styles.Muted, "URL: "+item.URL)
-	m.writeln(&b, m.styles.Muted, "Path: "+item.Destination)
-	if item.Status == manager.StatusCompleted {
-		m.writeln(&b, m.styles.Muted, "Completed in: "+humanDuration(completedDuration(item)))
+	title := m.styles.Label.Render("Preview Detail")
+	id := m.styles.Muted.Render("ID:   " + item.ID)
+	url := m.styles.Muted.Render("URL:  " + item.URL)
+	path := m.styles.Muted.Render("Path: " + item.Destination)
+
+	status := "\nStatus: " + m.statusPill(item.Status) + "\n"
+
+	var details string
+	if item.Status == manager.StatusDownloading {
+		details = lipgloss.JoinVertical(lipgloss.Left,
+			m.styles.Muted.Render(fmt.Sprintf("Progress: %s / %s (%s)", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), progressPercent(item.Progress))),
+			m.styles.Muted.Render(fmt.Sprintf("Speed:    %s", humanSpeed(item.Progress.SpeedBps))),
+			m.styles.Muted.Render(fmt.Sprintf("ETA:      %s", humanETA(item.Progress.ETA))),
+		)
+	} else if item.Status == manager.StatusCompleted {
+		details = lipgloss.JoinVertical(lipgloss.Left,
+			m.styles.Muted.Render(fmt.Sprintf("Completed:  %s", totalLabel(item.Progress.Total))),
+			m.styles.Muted.Render(fmt.Sprintf("Time taken: %s", humanDuration(completedDuration(item)))),
+		)
 	}
+
+	var errStr string
 	if item.Error != "" {
-		m.writeln(&b, m.styles.ErrorLine, "Last error: "+item.Error)
+		errStr = "\n" + m.styles.ErrorLine.Render("Error: "+item.Error)
 	}
-	return b.String()
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title, id, url, path, status, details, errStr,
+	)
+
+	return lipgloss.NewStyle().
+		BorderTop(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color(m.theme.SelectedCard)).
+		PaddingTop(1).
+		Render(content)
 }
 
 func completedDuration(item manager.DownloadRecord) time.Duration {
@@ -422,7 +486,7 @@ func completedDuration(item manager.DownloadRecord) time.Duration {
 }
 
 func (m *Model) statusPill(s manager.Status) string {
-	text := " " + statusLabel(s) + " "
+	text := statusLabel(s)
 	switch s {
 	case manager.StatusCompleted:
 		return m.styles.StatusDone.Render(text)

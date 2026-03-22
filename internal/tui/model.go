@@ -17,6 +17,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/Paraspandey-debugs/Relay/internal/core/download"
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
@@ -158,6 +160,10 @@ type Model struct {
 	logEntries      []string
 	removeConfirm   bool
 	pendingRemoveID string
+
+	jobsList JobsListComponent
+	details  DetailComponent
+	stats    StatsComponent
 }
 
 type memoProgress struct {
@@ -225,7 +231,22 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	}
 	m.styles = newStyles(m.theme)
 	m.help.ShowAll = false
+	m.jobsList = NewJobsList(m.theme, m.styles)
+	m.details = NewDetailComponent(m.theme, m.styles)
+	m.stats = NewStatsComponent(m.theme, m.styles)
 	m.syncBrowserTo(m.recentDir)
+
+	// Apply explicit backgrounds to text inputs to prevent terminal default bleed
+	inBg := lipgloss.Color(m.theme.Background)
+	inFg := lipgloss.Color(m.theme.Foreground)
+	inAccent := lipgloss.Color(m.theme.Accent)
+
+	inStyle := lipgloss.NewStyle().Foreground(inFg).Background(inBg)
+	promptStyle := lipgloss.NewStyle().Foreground(inAccent).Background(inBg)
+
+	m.input.TextStyle, m.input.PromptStyle, m.input.Cursor.Style = inStyle, promptStyle, promptStyle
+	m.searchInput.TextStyle, m.searchInput.PromptStyle, m.searchInput.Cursor.Style = inStyle, promptStyle, promptStyle
+	m.settingsInput.TextStyle, m.settingsInput.PromptStyle, m.settingsInput.Cursor.Style = inStyle, promptStyle, promptStyle
 	m.refreshSnapshot()
 	return m
 }
@@ -273,41 +294,41 @@ func (m *Model) refreshSnapshot() {
 func (m *Model) applyProgressSmoothing() {
 	now := time.Now()
 	for i := range m.items {
-		it := &m.items[i]
-		memo, ok := m.progressMemo[it.ID]
-		if !ok {
-			continue
-		}
-		if now.Sub(memo.At) > 5*time.Second {
-			continue
-		}
-
-		if it.Progress.SpeedBps > 0 {
-			memo.SpeedBps = it.Progress.SpeedBps
-			memo.At = now
-		}
-		if it.Progress.ETA > 0 {
-			memo.ETA = it.Progress.ETA
-			memo.At = now
-		}
-
-		if it.Status == manager.StatusDownloading {
-			if it.Progress.SpeedBps <= 0 && memo.SpeedBps > 0 {
-				it.Progress.SpeedBps = memo.SpeedBps
-			}
-			if it.Progress.ETA <= 0 && memo.ETA > 0 {
-				it.Progress.ETA = memo.ETA
-			}
-			if it.Progress.ETA <= 0 && it.Progress.Total > it.Progress.Downloaded && it.Progress.SpeedBps > 0 {
-				remaining := float64(it.Progress.Total-it.Progress.Downloaded) / it.Progress.SpeedBps
-				if remaining > 0 {
-					it.Progress.ETA = time.Duration(remaining * float64(time.Second))
-				}
-			}
-		}
-
-		m.progressMemo[it.ID] = memo
+		m.smoothSingleItem(&m.items[i], now)
 	}
+}
+
+func (m *Model) smoothSingleItem(it *manager.DownloadRecord, now time.Time) {
+	memo, ok := m.progressMemo[it.ID]
+	if !ok || now.Sub(memo.At) > 5*time.Second {
+		return
+	}
+
+	if it.Progress.SpeedBps > 0 {
+		memo.SpeedBps = it.Progress.SpeedBps
+		memo.At = now
+	}
+	if it.Progress.ETA > 0 {
+		memo.ETA = it.Progress.ETA
+		memo.At = now
+	}
+
+	if it.Status == manager.StatusDownloading {
+		if it.Progress.SpeedBps <= 0 && memo.SpeedBps > 0 {
+			it.Progress.SpeedBps = memo.SpeedBps
+		}
+		if it.Progress.ETA <= 0 && memo.ETA > 0 {
+			it.Progress.ETA = memo.ETA
+		}
+		if it.Progress.ETA <= 0 && it.Progress.Total > it.Progress.Downloaded && it.Progress.SpeedBps > 0 {
+			remaining := float64(it.Progress.Total-it.Progress.Downloaded) / it.Progress.SpeedBps
+			if remaining > 0 {
+				it.Progress.ETA = time.Duration(remaining * float64(time.Second))
+			}
+		}
+	}
+
+	m.progressMemo[it.ID] = memo
 }
 
 func (m *Model) currentItem() (manager.DownloadRecord, bool) {
@@ -331,7 +352,7 @@ func (m *Model) applyEvent(ev manager.Event) {
 			m.items[i].Error = ev.Error
 		}
 		m.items[i].UpdatedAt = ev.At
-		m.applyProgressSmoothing()
+		m.smoothSingleItem(&m.items[i], time.Now())
 		return
 	}
 

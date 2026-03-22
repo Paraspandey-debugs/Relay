@@ -13,17 +13,39 @@ import (
 )
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
+	// Route to components
+	m.jobsList, cmd = m.jobsList.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	m.details, cmd = m.details.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Sync the active selection to the details component on every update
+	m.details, _ = m.details.Update(JobSelectedMsg(m.jobsList.SelectedJob()))
+
+	m.stats, cmd = m.stats.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		if m.screen == splashScreen {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
-			return m, nil
+			return m, tea.Batch(cmds...)
 		}
 		if m.screen == addScreen {
 			return m.handleAddInput(msg)
@@ -88,13 +110,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd(m.tickEvery)
 	default:
 		if m.screen == addScreen || (m.screen == settingsScreen && m.settingsEditing) {
-			var cmd tea.Cmd
+			var inputCmd tea.Cmd
 			if m.screen == addScreen {
-				m.input, cmd = m.input.Update(msg)
+				m.input, inputCmd = m.input.Update(msg)
 			} else {
-				m.settingsInput, cmd = m.settingsInput.Update(msg)
+				m.settingsInput, inputCmd = m.settingsInput.Update(msg)
 			}
-			return m, cmd
+			if inputCmd != nil {
+				cmds = append(cmds, inputCmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// Map the search Active state to jobsList
+		m.jobsList.searchActive = m.searchActive
+		m.jobsList.searchQuery = m.searchQuery
+
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	}
@@ -185,18 +218,15 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.Blur()
 			m.searchQuery = ""
 			m.searchInput.SetValue("")
-			m.ensureSelectionVisible()
 			return m, nil
 		case "enter":
 			m.searchActive = false
 			m.searchInput.Blur()
-			m.ensureSelectionVisible()
 			return m, nil
 		default:
 			var cmd tea.Cmd
 			m.searchInput, cmd = m.searchInput.Update(msg)
 			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
-			m.ensureSelectionVisible()
 			return m, cmd
 		}
 	}
@@ -222,37 +252,6 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logCursor = 0
 		}
 		return m, nil
-	case key.Matches(msg, m.keys.TabQueued):
-		m.activeTab = tabQueued
-		m.ensureSelectionVisible()
-		return m, nil
-	case key.Matches(msg, m.keys.TabActive):
-		m.activeTab = tabActive
-		m.ensureSelectionVisible()
-		return m, nil
-	case key.Matches(msg, m.keys.TabDone):
-		m.activeTab = tabDone
-		m.ensureSelectionVisible()
-		return m, nil
-	case key.Matches(msg, m.keys.NextTab):
-		m.activeTab = (m.activeTab + 1) % 3
-		m.ensureSelectionVisible()
-		return m, nil
-	case key.Matches(msg, m.keys.Search):
-		if m.searchQuery != "" {
-			m.searchQuery = ""
-			m.searchInput.SetValue("")
-			m.searchInput.Blur()
-			m.searchActive = false
-			m.ensureSelectionVisible()
-			return m, nil
-		}
-		m.searchActive = true
-		m.searchInput.Focus()
-		return m, nil
-	case key.Matches(msg, m.keys.Help):
-		m.showHelp = !m.showHelp
-		return m, nil
 	case key.Matches(msg, m.keys.Up):
 		if m.showLogPanel {
 			if m.logCursor > 0 {
@@ -260,9 +259,7 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.selected > 0 {
-			m.selected--
-		}
+		m.jobsList.MoveSelection(-1)
 		return m, nil
 	case key.Matches(msg, m.keys.Down):
 		if m.showLogPanel {
@@ -271,9 +268,33 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if m.selected < len(m.visibleItems())-1 {
-			m.selected++
+		m.jobsList.MoveSelection(1)
+		return m, nil
+	case key.Matches(msg, m.keys.TabQueued):
+		m.jobsList.SetTab(tabQueued)
+		return m, nil
+	case key.Matches(msg, m.keys.TabActive):
+		m.jobsList.SetTab(tabActive)
+		return m, nil
+	case key.Matches(msg, m.keys.TabDone):
+		m.jobsList.SetTab(tabDone)
+		return m, nil
+	case key.Matches(msg, m.keys.NextTab):
+		m.jobsList.NextTab()
+		return m, nil
+	case key.Matches(msg, m.keys.Search):
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			m.searchInput.Blur()
+			m.searchActive = false
+			return m, nil
 		}
+		m.searchActive = true
+		m.searchInput.Focus()
+		return m, nil
+	case key.Matches(msg, m.keys.Help):
+		m.showHelp = !m.showHelp
 		return m, nil
 	case key.Matches(msg, m.keys.Add):
 		m.screen = addScreen
