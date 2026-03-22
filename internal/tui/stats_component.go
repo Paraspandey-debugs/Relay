@@ -70,7 +70,13 @@ func (m StatsComponent) HeaderView() string {
 	subtle := m.styles.Subtle.Render("Production Mode")
 	if m.width > 0 {
 		row := lipgloss.JoinHorizontal(lipgloss.Top, left, subtle)
-		return lipgloss.PlaceHorizontal(m.width, lipgloss.Left, row)
+		return lipgloss.PlaceHorizontal(
+			m.width,
+			lipgloss.Left,
+			row,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", subtle)
 }

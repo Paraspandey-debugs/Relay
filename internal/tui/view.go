@@ -11,14 +11,36 @@ import (
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
 
+func safeWidth(width int) int {
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
+func (m *Model) fullWidthLine(style lipgloss.Style, text string) string {
+	return style.Copy().Width(safeWidth(m.width)).Render(text)
+}
+
+func (m *Model) withAppBackground(content string) string {
+	return lipgloss.NewStyle().
+		Width(safeWidth(m.width)).
+		Background(lipgloss.Color(m.theme.Background)).
+		Render(content)
+}
+
 func (m *Model) View() string {
 	if m.screen == splashScreen {
-		return lipgloss.NewStyle().
-			Background(lipgloss.Color(m.theme.Background)).
-			Foreground(lipgloss.Color(m.theme.Foreground)).
-			Width(m.width).
-			Height(m.height).
-			Render(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderSplash()))
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			m.renderSplash(),
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
 	}
 
 	var content string
@@ -37,7 +59,7 @@ func (m *Model) View() string {
 		if m.searchActive {
 			headerLines = append(headerLines, m.searchInput.View())
 		} else if m.jobsList.searchQuery != "" {
-			headerLines = append(headerLines, m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)"))
+			headerLines = append(headerLines, m.fullWidthLine(m.styles.Subtle, "Filter: "+m.jobsList.searchQuery+"  (press f to clear)"))
 		}
 		header := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
 
@@ -97,17 +119,21 @@ func (m *Model) View() string {
 
 		// Wrap the two panes in a card-area background so there are no uncolored gaps.
 		// Width keeps any odd leftover column painted with the card color.
-		mainBody := lipgloss.NewStyle().
-			Background(lipgloss.Color(m.theme.Card)).
-			Width(innerWidth).
-			Height(availHeight).
-			Render(mainSplit)
+		mainBody := lipgloss.Place(
+			innerWidth,
+			availHeight,
+			lipgloss.Left,
+			lipgloss.Top,
+			mainSplit,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Card)),
+		)
 
 		mainLines := []string{header, mainBody, footer}
 		if m.errMsg != "" {
-			mainLines = append(mainLines, m.styles.ErrorLine.Render("error: "+m.errMsg))
+			mainLines = append(mainLines, m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg))
 		} else if m.message != "" {
-			mainLines = append(mainLines, m.styles.InfoLine.Render("info: "+m.message))
+			mainLines = append(mainLines, m.fullWidthLine(m.styles.InfoLine, "info: "+m.message))
 		}
 		content = lipgloss.JoinVertical(lipgloss.Left, mainLines...)
 	}
@@ -121,7 +147,16 @@ func (m *Model) View() string {
 		innerH = 1
 	}
 
-	placed := lipgloss.Place(innerW, innerH, lipgloss.Left, lipgloss.Top, content)
+	placed := lipgloss.Place(
+		innerW,
+		innerH,
+		lipgloss.Left,
+		lipgloss.Top,
+		content,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+	)
 	main := m.styles.App.Width(m.width).Height(m.height).Render(placed)
 	if m.removeConfirm {
 		return m.renderConfirmOverlay(main)
@@ -205,10 +240,10 @@ func (m *Model) renderGuideEntries(entries []string, width int) string {
 
 func (m *Model) renderLogPanel() string {
 	var lines []string
-	lines = append(lines, m.styles.Label.Render("Event Log"))
+	lines = append(lines, m.fullWidthLine(m.styles.Label, "Event Log"))
 
 	if len(m.logEntries) == 0 {
-		lines = append(lines, m.styles.Muted.Render("no log entries yet"))
+		lines = append(lines, m.fullWidthLine(m.styles.Muted, "no log entries yet"))
 		return lipgloss.JoinVertical(lipgloss.Left, lines...)
 	}
 
@@ -241,13 +276,14 @@ func (m *Model) renderLogPanel() string {
 		}
 		line := prefix + m.logEntries[i]
 		if i == m.logCursor {
-			lines = append(lines, m.styles.InfoLine.Render(line))
+			lines = append(lines, m.fullWidthLine(m.styles.InfoLine, line))
 		} else {
-			lines = append(lines, m.styles.Muted.Render(line))
+			lines = append(lines, m.fullWidthLine(m.styles.Muted, line))
 		}
 	}
-	lines = append(lines, m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	lines = append(lines, m.fullWidthLine(m.styles.Subtle, "l toggle  up/down scroll  g top  G bottom"))
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return m.withAppBackground(content)
 }
 
 func (m *Model) renderConfirmOverlay(content string) string {
@@ -272,12 +308,24 @@ func (m *Model) renderConfirmOverlay(content string) string {
 func (m *Model) renderSplash() string {
 	banner := m.styles.Header.Render(strings.TrimSpace(relayStartupASCII))
 	subtitle := m.styles.Subtle.Render("download manager")
-	content := lipgloss.JoinVertical(lipgloss.Center, banner, "", subtitle)
 
-	if m.width > 0 && m.height > 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	blockWidth := lipgloss.Width(banner)
+	if w := lipgloss.Width(subtitle); w > blockWidth {
+		blockWidth = w
 	}
-	return content
+	if blockWidth < 1 {
+		blockWidth = 1
+	}
+
+	fill := lipgloss.NewStyle().
+		Width(blockWidth).
+		Background(lipgloss.Color(m.theme.Background))
+
+	bannerLine := fill.Render(banner)
+	spacerLine := fill.Render("")
+	subtitleLine := fill.Render(subtitle)
+
+	return lipgloss.JoinVertical(lipgloss.Left, bannerLine, spacerLine, subtitleLine)
 }
 
 func (m *Model) renderAddInput() string {
@@ -292,6 +340,7 @@ func (m *Model) renderAddInput() string {
 	if m.step == addDestinationStep {
 		label = "Destination Path"
 	}
+	m.input.Width = m.width - 4
 	lines = append(lines, m.styles.Label.Render(label), m.input.View())
 
 	if m.step == addDestinationStep {
@@ -319,9 +368,10 @@ func (m *Model) renderAddInput() string {
 		lines = append(lines, "", m.styles.Subtle.Render(m.browserHint()))
 	}
 	if m.errMsg != "" {
-		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg))
+		lines = append(lines, "", m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg))
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return m.withAppBackground(content)
 }
 
 // Legacy per-row/detail/queue rendering removed — JobsListComponent and DetailComponent handle these.

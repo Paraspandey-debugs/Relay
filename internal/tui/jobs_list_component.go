@@ -150,6 +150,14 @@ func (m JobsListComponent) SelectedJob() *manager.DownloadRecord {
 	return m.jobs[id]
 }
 
+func (m JobsListComponent) paneContentWidth() int {
+	width := m.width - 4
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
 func (m JobsListComponent) View() string {
 	vis := m.visibleItems()
 
@@ -177,8 +185,9 @@ func (m JobsListComponent) View() string {
 		maxItems = 1
 	}
 
+	lineWidth := m.paneContentWidth()
 	if len(vis) == 0 {
-		b.WriteString(m.styles.CardMuted.Render("No downloads in this tab. Press 'a' to add."))
+		b.WriteString(m.styles.CardMuted.Copy().Width(lineWidth).Render("No downloads in this tab. Press 'a' to add."))
 	} else {
 		// Calculate slice bounds to keep selected in view
 		start := 0
@@ -203,11 +212,11 @@ func (m JobsListComponent) View() string {
 		}
 
 		if start > 0 {
-			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d above", start)))
+			b.WriteString(m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("...and %d above", start)))
 			b.WriteString("\n")
 		}
 		if end < len(vis) {
-			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d below", len(vis)-end)))
+			b.WriteString(m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("...and %d below", len(vis)-end)))
 			b.WriteString("\n")
 		}
 	}
@@ -246,18 +255,12 @@ func (m JobsListComponent) renderTabs() string {
 		}
 	}
 	row := renderTab("Queued", queued, tabQueued) + renderTab("Active", active, tabActive) + renderTab("Done", done, tabDone)
-	lineWidth := m.width - 4
-	if lineWidth < 1 {
-		lineWidth = 1
-	}
+	lineWidth := m.paneContentWidth()
 	return lipgloss.NewStyle().Background(lipgloss.Color(m.theme.Card)).Width(lineWidth).Render(row)
 }
 
 func (m JobsListComponent) renderQueue() string {
-	lineWidth := m.width - 4
-	if lineWidth < 1 {
-		lineWidth = 1
-	}
+	lineWidth := m.paneContentWidth()
 	if len(m.queue) == 0 {
 		return m.styles.CardMuted.Copy().Width(lineWidth).Render("Queue: empty")
 	}

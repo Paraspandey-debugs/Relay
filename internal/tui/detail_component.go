@@ -62,8 +62,8 @@ func (m DetailComponent) View() string {
 
 	title := m.styles.CardLabel.Copy().Width(lineWidth).Render("Detailed Overview")
 	id := m.styles.CardMuted.Copy().Width(lineWidth).Render("ID:   " + item.ID)
-	url := m.styles.CardMuted.Render(wrap.Render("URL:  " + item.URL))
-	path := m.styles.CardMuted.Render(wrap.Render("Path: " + item.Destination))
+	url := m.styles.CardMuted.Copy().Width(lineWidth).Render(wrap.Render("URL:  " + item.URL))
+	path := m.styles.CardMuted.Copy().Width(lineWidth).Render(wrap.Render("Path: " + item.Destination))
 	statusLine := lipgloss.JoinHorizontal(lipgloss.Top, m.styles.CardMuted.Render("Status: "), statusPill(item.Status, m.styles))
 	status := m.styles.CardMuted.Copy().Width(lineWidth).Render(statusLine)
 

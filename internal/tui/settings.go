@@ -260,10 +260,11 @@ func (m *Model) renderSettings() string {
 	}
 
 	if m.errMsg != "" {
-		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg), "")
+		lines = append(lines, "", m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg), "")
 	}
 
-	return strings.Join(lines, "\n")
+	content := strings.Join(lines, "\n")
+	return m.withAppBackground(content)
 }
 
 // handleSettingsKeys processes key events on the settings screen.
