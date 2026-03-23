@@ -120,10 +120,18 @@ relayd --color-accent "#FF00FF" --color-background "#0D0D0D"
 
 | Key | Action |
 |---|---|
+| `1` | Show queued/paused/errored tab |
+| `2` | Show active downloads tab |
+| `3` | Show completed downloads tab |
+| `Tab` | Cycle between tabs |
+| `f` | Start/clear list filter search |
+| `l` | Toggle event log panel |
+| `g` / `G` | Jump log view to top/bottom |
 | `a` | Add a new download |
 | `p` | Pause the selected download |
 | `r` | Resume the selected download |
-| `x` | Remove the selected download |
+| `x` | Prompt to remove selected download |
+| `y` / `n` | Confirm/cancel destructive prompts |
 | `s` | Open the download settings panel |
 | `K` | Move selected item up in the queue |
 | `J` | Move selected item down in the queue |
@@ -131,7 +139,7 @@ relayd --color-accent "#FF00FF" --color-background "#0D0D0D"
 | `j` / `↓` | Move cursor down |
 | `k` / `↑` | Move cursor up |
 | `?` / `h` | Toggle help overlay |
-| `q` / `Ctrl+C` | Quit |
+| `Ctrl+Q` / `Ctrl+C` | Quit |
 
 ---
 

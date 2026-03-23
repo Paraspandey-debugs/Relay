@@ -13,17 +13,39 @@ import (
 )
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
+	// Route to components
+	m.jobsList, cmd = m.jobsList.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	m.details, cmd = m.details.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Sync the active selection to the details component on every update
+	m.details, _ = m.details.Update(JobSelectedMsg(m.jobsList.SelectedJob()))
+
+	m.stats, cmd = m.stats.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		return m, nil
+		return m, tea.Batch(cmds...)
 	case tea.KeyMsg:
 		if m.screen == splashScreen {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
-			return m, nil
+			return m, tea.Batch(cmds...)
 		}
 		if m.screen == addScreen {
 			return m.handleAddInput(msg)
@@ -50,28 +72,25 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.progressMemo[msg.ID] = memo
 		}
-		if msg.Type == manager.EventProgress {
-			m.applyEvent(msg)
-		} else {
-			m.refreshSnapshot()
-			m.message = fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID))
-			m.messageUntil = time.Now().Add(4 * time.Second)
+		// Non-progress structural events: refresh jobs list snapshot
+		if msg.Type != manager.EventProgress {
+			m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+			m.notifyInfo(fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID)))
 		}
 		if msg.Error != "" {
-			m.errMsg = msg.Error
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError(msg.Error)
 		}
+		m.syncStats()
 		return m, nil
 	case actionResultMsg:
 		if msg.err != nil {
-			m.errMsg = msg.err.Error()
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError(msg.err.Error())
 			return m, nil
 		}
-		m.message = msg.info
-		m.messageUntil = time.Now().Add(4 * time.Second)
+		m.notifyInfo(msg.info)
 		m.errMsg = ""
-		m.refreshSnapshot()
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
 		return m, nil
 	case tickMsg:
 		m.now = time.Time(msg)
@@ -92,13 +111,24 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd(m.tickEvery)
 	default:
 		if m.screen == addScreen || (m.screen == settingsScreen && m.settingsEditing) {
-			var cmd tea.Cmd
+			var inputCmd tea.Cmd
 			if m.screen == addScreen {
-				m.input, cmd = m.input.Update(msg)
+				m.input, inputCmd = m.input.Update(msg)
 			} else {
-				m.settingsInput, cmd = m.settingsInput.Update(msg)
+				m.settingsInput, inputCmd = m.settingsInput.Update(msg)
 			}
-			return m, cmd
+			if inputCmd != nil {
+				cmds = append(cmds, inputCmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// Map the search Active state to jobsList
+		m.jobsList.searchActive = m.searchActive
+		m.jobsList.searchQuery = m.searchQuery
+
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 	}
@@ -107,13 +137,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Cancel):
 		m.input.Blur()
 		m.screen = listScreen
 		m.step = addURLStep
 		m.add = addDraft{}
-		m.message = "add cancelled"
-		m.messageUntil = time.Now().Add(3 * time.Second)
-		return m, nil
+		m.input.SetValue("")
+		m.input.Placeholder = "https://example.com/file.iso"
+		m.message = ""
+		m.messageUntil = time.Time{}
+		m.appendLog("add cancelled")
+		return m, tea.ClearScreen
 	case m.step == addDestinationStep && key.Matches(msg, m.keys.Up):
 		m.moveBrowser(-1)
 		return m, nil
@@ -122,8 +157,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case m.step == addDestinationStep && msg.String() == "right":
 		if err := m.browserEnterSelected(); err != nil {
-			m.errMsg = err.Error()
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError(err.Error())
 		}
 		return m, nil
 	case m.step == addDestinationStep && msg.String() == "left":
@@ -135,8 +169,7 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case msg.String() == "enter":
 		value := strings.TrimSpace(m.input.Value())
 		if value == "" {
-			m.errMsg = "field cannot be empty"
-			m.errUntil = time.Now().Add(8 * time.Second)
+			m.notifyError("field cannot be empty")
 			return m, nil
 		}
 		if m.step == addURLStep {
@@ -147,6 +180,10 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.add.dst = value
 		m.recentDir = filepath.Dir(value)
+		if existing, ok := m.mgr.FindDuplicate(m.add.url, m.add.dst); ok {
+			m.notifyError(fmt.Sprintf("duplicate exists: %s", shortID(existing.ID)))
+			return m, nil
+		}
 		m.input.Blur()
 		m.screen = listScreen
 		m.step = addURLStep
@@ -161,21 +198,110 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.removeConfirm {
+		switch {
+		case key.Matches(msg, m.keys.Confirm):
+			id := m.pendingRemoveID
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			if id == "" {
+				return m, nil
+			}
+			return m, removeCmd(m.mgr, id, m.cleanupOnRemove)
+		case key.Matches(msg, m.keys.Cancel):
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			m.notifyInfo("remove cancelled")
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
+	if m.searchActive {
+		switch msg.String() {
+		case "esc":
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			return m, nil
+		case "enter":
+			m.searchActive = false
+			m.searchInput.Blur()
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
+			return m, cmd
+		}
+	}
+
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
-	case key.Matches(msg, m.keys.Help):
-		m.showHelp = !m.showHelp
+	case key.Matches(msg, m.keys.Log):
+		m.showLogPanel = !m.showLogPanel
+		if m.showLogPanel {
+			m.logCursor = len(m.logEntries) - 1
+			if m.logCursor < 0 {
+				m.logCursor = 0
+			}
+		}
+		return m, tea.ClearScreen
+	case key.Matches(msg, m.keys.LogTop):
+		m.logCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.LogBottom):
+		m.logCursor = len(m.logEntries) - 1
+		if m.logCursor < 0 {
+			m.logCursor = 0
+		}
 		return m, nil
 	case key.Matches(msg, m.keys.Up):
-		if m.selected > 0 {
-			m.selected--
+		if m.showLogPanel {
+			if m.logCursor > 0 {
+				m.logCursor--
+			}
+			return m, nil
 		}
+		m.jobsList.MoveSelection(-1)
 		return m, nil
 	case key.Matches(msg, m.keys.Down):
-		if m.selected < len(m.items)-1 {
-			m.selected++
+		if m.showLogPanel {
+			if m.logCursor < len(m.logEntries)-1 {
+				m.logCursor++
+			}
+			return m, nil
 		}
+		m.jobsList.MoveSelection(1)
+		return m, nil
+	case key.Matches(msg, m.keys.TabQueued):
+		m.jobsList.SetTab(tabQueued)
+		return m, nil
+	case key.Matches(msg, m.keys.TabActive):
+		m.jobsList.SetTab(tabActive)
+		return m, nil
+	case key.Matches(msg, m.keys.TabDone):
+		m.jobsList.SetTab(tabDone)
+		return m, nil
+	case key.Matches(msg, m.keys.NextTab):
+		m.jobsList.NextTab()
+		return m, nil
+	case key.Matches(msg, m.keys.Search):
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			m.searchInput.Blur()
+			m.searchActive = false
+			return m, nil
+		}
+		m.searchActive = true
+		m.searchInput.Focus()
+		return m, nil
+	case key.Matches(msg, m.keys.Help):
+		m.showHelp = !m.showHelp
 		return m, nil
 	case key.Matches(msg, m.keys.Add):
 		m.screen = addScreen
@@ -197,7 +323,9 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case key.Matches(msg, m.keys.Remove):
 		if item, ok := m.currentItem(); ok {
-			return m, removeCmd(m.mgr, item.ID, m.cleanupOnRemove)
+			m.pendingRemoveID = item.ID
+			m.removeConfirm = true
+			return m, nil
 		}
 		return m, nil
 	case key.Matches(msg, m.keys.MoveQueueUp):
@@ -208,9 +336,9 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openSettings()
 		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
-		m.refreshSnapshot()
-		m.message = "refreshed"
-		m.messageUntil = time.Now().Add(3 * time.Second)
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
+		m.notifyInfo("refreshed")
 		return m, nil
 	default:
 		return m, nil
@@ -222,23 +350,35 @@ func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	q := m.jobsList.Queue()
 	idx := -1
-	for i, id := range m.queue {
+	for i, id := range q {
 		if id == item.ID {
 			idx = i
 			break
 		}
 	}
 	if idx < 0 {
-		m.errMsg = "selected item is not queued"
+		m.notifyError("selected item is not queued")
 		return m, nil
 	}
 	newIdx := idx + delta
-	if newIdx < 0 || newIdx >= len(m.queue) {
+	if newIdx < 0 || newIdx >= len(q) {
 		return m, nil
 	}
-	q := append([]string(nil), m.queue...)
-	q[idx], q[newIdx] = q[newIdx], q[idx]
-	m.queue = q
-	return m, reorderQueueCmd(m.mgr, q)
+	nq := append([]string(nil), q...)
+	nq[idx], nq[newIdx] = nq[newIdx], nq[idx]
+	return m, reorderQueueCmd(m.mgr, nq)
+}
+
+func (m *Model) notifyError(err string) {
+	m.errMsg = err
+	m.errUntil = time.Now().Add(8 * time.Second)
+	m.appendLog("error: " + err)
+}
+
+func (m *Model) notifyInfo(info string) {
+	m.message = info
+	m.messageUntil = time.Now().Add(4 * time.Second)
+	m.appendLog(info)
 }

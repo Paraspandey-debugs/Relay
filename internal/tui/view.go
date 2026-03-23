@@ -5,197 +5,387 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
 
+func safeWidth(width int) int {
+	if width < 1 {
+		return 1
+	}
+	return width
+}
+
+func (m *Model) contentWidth() int {
+	return safeWidth(m.width - 4)
+}
+
+func (m *Model) fullWidthLine(style lipgloss.Style, text string) string {
+	return style.Copy().Width(m.contentWidth()).Render(text)
+}
+
+func (m *Model) withAppBackground(content string) string {
+	return lipgloss.NewStyle().
+		Width(m.contentWidth()).
+		Background(lipgloss.Color(m.theme.Background)).
+		Render(content)
+}
+
 func (m *Model) View() string {
 	if m.screen == splashScreen {
-		return m.renderSplash()
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			m.renderSplash(),
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
 	}
 
+	var content string
 	if m.screen == addScreen {
-		return m.renderAddInput()
-	}
-
-	if m.screen == settingsScreen {
-		return m.renderSettings()
-	}
-
-	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Relay"))
-	b.WriteString("\n\n")
-
-	if len(m.items) == 0 {
-		b.WriteString(m.styles.Muted.Render("No downloads yet. Press 'a' to add one."))
-		b.WriteString("\n\n")
+		content = m.renderAddInput()
+	} else if m.screen == settingsScreen {
+		content = m.renderSettings()
 	} else {
-		for i, item := range m.items {
-			selected := i == m.selected
-			b.WriteString(m.renderDownloadRow(item, selected))
-			b.WriteString("\n")
+
+		// Route selection to Detail component via message
+		sel := m.jobsList.SelectedJob()
+		m.details, _ = m.details.Update(JobSelectedMsg(sel))
+
+		// Top pane / Header
+		headerLines := []string{m.stats.HeaderView()}
+		if m.searchActive {
+			headerLines = append(headerLines, m.searchInput.View())
+		} else if m.jobsList.searchQuery != "" {
+			headerLines = append(headerLines, m.fullWidthLine(m.styles.Subtle, "Filter: "+m.jobsList.searchQuery+"  (press f to clear)"))
 		}
-		b.WriteString("\n")
+		header := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
+
+		// Bottom Stats
+		m.stats.UpdateStats(m.jobsList.GetTotal(), m.jobsList.GetQueued(), m.jobsList.GetActive(), m.jobsList.GetDone(), m.jobsList.GetAggregateSpeed())
+		footer := m.stats.View()
+
+		// Add Log Panel if requested
+		if m.showLogPanel {
+			logView := m.renderLogPanel()
+			footer = logView + "\n" + footer
+		}
+
+		appPaddingVert := 2 // m.styles.App has Padding(1, 2)
+		// account for horizontal padding (left + right). Padding(1,2) => 2 each side = 4 total
+		appPaddingHoriz := 4
+		usedHeight := lipgloss.Height(header) + lipgloss.Height(footer) + appPaddingVert
+		if m.errMsg != "" {
+			usedHeight += 2
+		} else if m.message != "" {
+			usedHeight += 2
+		}
+		availHeight := m.height - usedHeight
+		if availHeight < 5 {
+			availHeight = 5
+		}
+
+		// Compute inner width available to the two columns after App horizontal padding
+		innerWidth := m.width - appPaddingHoriz
+		if innerWidth <= 0 {
+			innerWidth = m.width
+		}
+		leftOuterWidth := innerWidth / 2
+		rightOuterWidth := innerWidth - leftOuterWidth
+
+		// LeftPane/RightPane each have border + horizontal padding = 4 columns.
+		// Components receive content width; styles add the chrome.
+		const paneChromeHoriz = 4
+		leftContentWidth := leftOuterWidth - paneChromeHoriz
+		rightContentWidth := rightOuterWidth - paneChromeHoriz
+		if leftContentWidth < 12 {
+			leftContentWidth = 12
+		}
+		if rightContentWidth < 12 {
+			rightContentWidth = 12
+		}
+
+		m.jobsList.SetSize(leftContentWidth, availHeight)
+		// send window size to detail component so it updates its internal width/height
+		m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
+
+		// Dash Layout Main
+		mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.jobsList.View(),
+			m.details.View(),
+		)
+
+		// Wrap the two panes in a card-area background so there are no uncolored gaps.
+		// Width keeps any odd leftover column painted with the card color.
+		mainBody := lipgloss.Place(
+			innerWidth,
+			availHeight,
+			lipgloss.Left,
+			lipgloss.Top,
+			mainSplit,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Card)),
+		)
+
+		mainLines := []string{header, mainBody, footer}
+		if m.errMsg != "" {
+			mainLines = append(mainLines, m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg))
+		} else if m.message != "" {
+			mainLines = append(mainLines, m.fullWidthLine(m.styles.InfoLine, "info: "+m.message))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, mainLines...)
 	}
 
-	b.WriteString(m.renderQueue())
-	b.WriteString("\n")
-
-	if item, ok := m.currentItem(); ok {
-		b.WriteString(m.renderSelected(item))
-		b.WriteString("\n")
+	innerW := m.width - 4
+	innerH := m.height - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+	if innerH < 1 {
+		innerH = 1
 	}
 
-	if m.errMsg != "" {
-		b.WriteString(m.styles.ErrorLine.Render("error: " + m.errMsg))
-		b.WriteString("\n")
-	} else if m.message != "" {
-		b.WriteString(m.styles.InfoLine.Render("info: " + m.message))
-		b.WriteString("\n")
+	placed := lipgloss.Place(
+		innerW,
+		innerH,
+		lipgloss.Left,
+		lipgloss.Top,
+		content,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+	)
+	main := m.styles.App.Width(m.width).Height(m.height).Render(placed)
+	if m.removeConfirm {
+		return m.renderConfirmOverlay(main)
+	}
+	return main
+}
+
+// removed writeln helper — use explicit slices and lipgloss.JoinVertical in renderers
+
+func (m *Model) renderHelpBlock() string {
+	availableWidth := 72
+	if m.width > 0 {
+		availableWidth = m.width - 8
+	}
+	if availableWidth < 28 {
+		availableWidth = 28
 	}
 
-	b.WriteString("\n")
+	entries := m.shortGuideEntries()
 	if m.showHelp {
-		b.WriteString(m.help.View(m.keys))
-	} else {
-		b.WriteString(m.help.ShortHelpView(m.keys.ShortHelp()))
+		entries = m.fullGuideEntries()
 	}
 
-	return m.styles.App.Render(b.String())
+	guideText := m.renderGuideEntries(entries, availableWidth-4)
+	body := m.styles.FooterTitle.Render("Guide") + "\n" + guideText
+	return m.styles.FooterCard.MaxWidth(availableWidth).Render(body)
+}
+func (m *Model) renderHeader() string {
+	return m.styles.Header.Render("Relay")
+}
+func (m *Model) shortGuideEntries() []string {
+	return []string{
+		"1/2/3 tab", "tab next", "f filter", "l log", "a add", "p pause", "r resume", "x remove", "ctrl+q quit",
+	}
+}
+
+func (m *Model) fullGuideEntries() []string {
+	return []string{
+		"1 queued", "2 active", "3 done", "tab next", "f filter", "l log",
+		"j/k move", "p pause", "r resume", "x remove", "y confirm", "n cancel",
+		"K/J queue", "R refresh", "g/G log top/bottom", "s settings", "? hide guide", "ctrl+q quit",
+	}
+}
+
+func (m *Model) renderGuideEntries(entries []string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+
+	var rawLines []string
+	line := ""
+	for _, entry := range entries {
+		part := "[" + entry + "]"
+		plainLen := len(entry) + 2
+
+		currentLen := len(line)
+		if line == "" {
+			line = part
+			continue
+		}
+		if currentLen+2+plainLen > width {
+			rawLines = append(rawLines, line)
+			line = part
+			continue
+		}
+		line += "  " + part
+	}
+	if line != "" {
+		rawLines = append(rawLines, line)
+	}
+
+	lines := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		lines = append(lines, m.styles.Subtle.Render(raw))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// Dead legacy rendering helpers removed: tabs/search/stats are handled by components.
+
+func (m *Model) renderLogPanel() string {
+	var lines []string
+	lines = append(lines, m.fullWidthLine(m.styles.Label, "Event Log"))
+
+	if len(m.logEntries) == 0 {
+		lines = append(lines, m.fullWidthLine(m.styles.Muted, "no log entries yet"))
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+
+	maxLines := 8
+	if m.height > 0 {
+		if h := m.height / 5; h > maxLines {
+			maxLines = h
+		}
+		if maxLines > 12 {
+			maxLines = 12
+		}
+	}
+	if maxLines < 4 {
+		maxLines = 4
+	}
+
+	start := m.logCursor - maxLines + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxLines
+	if end > len(m.logEntries) {
+		end = len(m.logEntries)
+	}
+
+	for i := start; i < end; i++ {
+		prefix := "  "
+		if i == m.logCursor {
+			prefix = "> "
+		}
+		line := prefix + m.logEntries[i]
+		if i == m.logCursor {
+			lines = append(lines, m.fullWidthLine(m.styles.InfoLine, line))
+		} else {
+			lines = append(lines, m.fullWidthLine(m.styles.Muted, line))
+		}
+	}
+	lines = append(lines, m.fullWidthLine(m.styles.Subtle, "l toggle  up/down scroll  g top  G bottom"))
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return m.withAppBackground(content)
+}
+
+func (m *Model) renderConfirmOverlay(_ string) string {
+	msg := "Remove selected download?\n"
+	msg += "This can delete partial files if cleanup is enabled.\n\n"
+	msg += "y/enter confirm   n/esc cancel"
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color(m.theme.Warning)).
+		Background(lipgloss.Color(m.theme.Card)).
+		Padding(1, 2).
+		Render(msg)
+
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			box,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
+	}
+	return box
 }
 
 func (m *Model) renderSplash() string {
 	banner := m.styles.Header.Render(strings.TrimSpace(relayStartupASCII))
 	subtitle := m.styles.Subtle.Render("download manager")
-	content := lipgloss.JoinVertical(lipgloss.Center, banner, "", subtitle)
 
-	if m.width > 0 && m.height > 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	blockWidth := lipgloss.Width(banner)
+	if w := lipgloss.Width(subtitle); w > blockWidth {
+		blockWidth = w
 	}
-	return content
+	if blockWidth < 1 {
+		blockWidth = 1
+	}
+
+	fill := lipgloss.NewStyle().
+		Width(blockWidth).
+		Background(lipgloss.Color(m.theme.Background))
+
+	bannerLine := fill.Render(banner)
+	spacerLine := fill.Render("")
+	subtitleLine := fill.Render(subtitle)
+
+	return lipgloss.JoinVertical(lipgloss.Left, bannerLine, spacerLine, subtitleLine)
 }
 
 func (m *Model) renderAddInput() string {
-	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Add Download"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.Subtle.Render("Enter details and press Enter to continue, Esc to cancel."))
-	b.WriteString("\n\n")
+	var lines []string
+	lines = append(lines,
+		m.styles.Header.Render("Add Download"),
+		m.styles.Subtle.Render("Enter details and press Enter to continue, Esc to cancel."),
+		"",
+	)
 
 	label := "Source URL"
 	if m.step == addDestinationStep {
 		label = "Destination Path"
 	}
-	b.WriteString(m.styles.Label.Render(label))
-	b.WriteString("\n")
-	b.WriteString(m.input.View())
-	b.WriteString("\n")
+	m.input.Width = m.width - 4
+	lines = append(lines, m.styles.Label.Render(label), m.input.View())
+
 	if m.step == addDestinationStep {
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(fmt.Sprintf("URL: %s", m.add.url)))
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(fmt.Sprintf("Recent directory: %s", m.recentDir)))
-		b.WriteString("\n\n")
-		b.WriteString(m.styles.Label.Render("Directory Tree"))
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render(m.browserPathLabel()))
-		b.WriteString("\n")
+		lines = append(lines,
+			"",
+			m.styles.Muted.Render(fmt.Sprintf("URL: %s", m.add.url)),
+			m.styles.Muted.Render(fmt.Sprintf("Recent directory: %s", m.recentDir)),
+			"",
+			m.styles.Label.Render("Directory Tree"),
+			m.styles.Muted.Render(m.browserPathLabel()),
+		)
 		for i, entry := range m.visibleBrowserEntries() {
 			absoluteIndex := m.browserOffset + i
 			prefix := "  "
 			if absoluteIndex == m.browserSelected {
 				prefix = "> "
 			}
-			b.WriteString(m.styles.Muted.Render(prefix + entry.name + "/"))
-			b.WriteString("\n")
+			lines = append(lines, m.styles.Muted.Render(prefix+entry.name+"/"))
 		}
 		if len(m.browserEntries) == 0 {
-			b.WriteString(m.styles.Muted.Render("(no subdirectories)"))
-			b.WriteString("\n")
+			lines = append(lines, m.styles.Muted.Render("(no subdirectories)"))
 		} else {
-			b.WriteString(m.styles.Subtle.Render(m.browserPaginationLabel()))
-			b.WriteString("\n")
+			lines = append(lines, m.styles.Subtle.Render(m.browserPaginationLabel()))
 		}
-		b.WriteString("\n")
-		b.WriteString(m.styles.Subtle.Render(m.browserHint()))
+		lines = append(lines, "", m.styles.Subtle.Render(m.browserHint()))
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n")
-		b.WriteString(m.styles.ErrorLine.Render("error: " + m.errMsg))
+		lines = append(lines, "", m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg))
 	}
-	return m.styles.App.Render(b.String())
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return m.withAppBackground(content)
 }
 
-func (m *Model) renderDownloadRow(item manager.DownloadRecord, selected bool) string {
-	bar := m.progress.ViewAs(progressRatio(item.Progress))
-	status := m.statusPill(item.Status)
-	meta := ""
-	if item.Status == manager.StatusCompleted {
-		meta = fmt.Sprintf(
-			"%s  %s  %s/%s  completed in %s",
-			shortID(item.ID),
-			status,
-			humanBytes(item.Progress.Downloaded),
-			totalLabel(item.Progress.Total),
-			humanDuration(completedDuration(item)),
-		)
-	} else {
-		meta = fmt.Sprintf(
-			"%s  %s  %s/%s  %s  ETA %s",
-			shortID(item.ID),
-			status,
-			humanBytes(item.Progress.Downloaded),
-			totalLabel(item.Progress.Total),
-			humanSpeed(item.Progress.SpeedBps),
-			humanETA(item.Progress.ETA),
-		)
-	}
-
-	fileLine := item.Destination
-	if item.Destination == "" {
-		fileLine = item.URL
-	}
-
-	block := m.styles.DownloadCard.Render(
-		m.styles.CardTitle.Render(fileLine) + "\n" +
-			m.styles.Muted.Render(meta) + "\n" +
-			bar,
-	)
-	if selected {
-		return m.styles.SelectedCard.Render(block)
-	}
-	return block
-}
-
-func (m *Model) renderQueue() string {
-	if len(m.queue) == 0 {
-		return m.styles.Muted.Render("Queue: empty")
-	}
-	parts := make([]string, 0, len(m.queue))
-	for i, id := range m.queue {
-		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
-	}
-	return m.styles.Label.Render("Queue") + "\n" + strings.Join(parts, "  ")
-}
-
-func (m *Model) renderSelected(item manager.DownloadRecord) string {
-	var b strings.Builder
-	b.WriteString(m.styles.Label.Render("Selected"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.Muted.Render("ID: "+item.ID) + "\n")
-	b.WriteString(m.styles.Muted.Render("URL: "+item.URL) + "\n")
-	b.WriteString(m.styles.Muted.Render("Path: " + item.Destination))
-	if item.Status == manager.StatusCompleted {
-		b.WriteString("\n")
-		b.WriteString(m.styles.Muted.Render("Completed in: " + humanDuration(completedDuration(item))))
-	}
-	if item.Error != "" {
-		b.WriteString("\n")
-		b.WriteString(m.styles.ErrorLine.Render("Last error: " + item.Error))
-	}
-	return b.String()
-}
+// Legacy per-row/detail/queue rendering removed — JobsListComponent and DetailComponent handle these.
 
 func completedDuration(item manager.DownloadRecord) time.Duration {
 	if item.ActiveFor > 0 {
@@ -216,21 +406,7 @@ func completedDuration(item manager.DownloadRecord) time.Duration {
 	return 0
 }
 
-func (m *Model) statusPill(s manager.Status) string {
-	text := " " + statusLabel(s) + " "
-	switch s {
-	case manager.StatusCompleted:
-		return m.styles.StatusDone.Render(text)
-	case manager.StatusDownloading:
-		return m.styles.StatusActive.Render(text)
-	case manager.StatusPaused:
-		return m.styles.StatusPaused.Render(text)
-	case manager.StatusErrored:
-		return m.styles.StatusError.Render(text)
-	default:
-		return m.styles.StatusQueued.Render(text)
-	}
-}
+// statusPill removed from view.go; components use their own rendering helpers.
 
 func progressRatio(p manager.ProgressInfo) float64 {
 	if p.Total <= 0 {

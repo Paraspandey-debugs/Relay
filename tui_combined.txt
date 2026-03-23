@@ -1,0 +1,2851 @@
+===== File: internal/tui/browser.go =====
+package tui
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+func (m *Model) syncBrowserTo(dir string) {
+	clean := filepath.Clean(dir)
+	if clean == "." || clean == "" {
+		clean = m.homeDir
+	}
+	if !strings.HasPrefix(clean, m.homeDir) {
+		clean = m.homeDir
+	}
+	m.browserDir = clean
+	m.browserSelected = 0
+	m.browserOffset = 0
+	_ = m.loadBrowserEntries()
+}
+
+func (m *Model) loadBrowserEntries() error {
+	entries, err := os.ReadDir(m.browserDir)
+	if err != nil {
+		m.browserEntries = nil
+		return err
+	}
+
+	out := make([]browserEntry, 0, len(entries)+1)
+	if m.browserDir != m.homeDir {
+		out = append(out, browserEntry{
+			name:  "..",
+			path:  filepath.Dir(m.browserDir),
+			isDir: true,
+		})
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		out = append(out, browserEntry{
+			name:  entry.Name(),
+			path:  filepath.Join(m.browserDir, entry.Name()),
+			isDir: true,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].name) < strings.ToLower(out[j].name)
+	})
+	m.browserEntries = out
+	if m.browserSelected >= len(m.browserEntries) {
+		m.browserSelected = len(m.browserEntries) - 1
+	}
+	if m.browserSelected < 0 {
+		m.browserSelected = 0
+	}
+	m.ensureBrowserSelectionVisible()
+	return nil
+}
+
+func (m *Model) moveBrowser(delta int) {
+	if len(m.browserEntries) == 0 {
+		return
+	}
+	m.browserSelected += delta
+	if m.browserSelected < 0 {
+		m.browserSelected = 0
+	}
+	if m.browserSelected >= len(m.browserEntries) {
+		m.browserSelected = len(m.browserEntries) - 1
+	}
+	m.ensureBrowserSelectionVisible()
+}
+
+func (m *Model) browserEnterSelected() error {
+	entry, ok := m.selectedBrowserEntry()
+	if !ok {
+		return nil
+	}
+	m.syncBrowserTo(entry.path)
+	return nil
+}
+
+func (m *Model) browserParent() {
+	if m.browserDir == m.homeDir {
+		return
+	}
+	m.syncBrowserTo(filepath.Dir(m.browserDir))
+}
+
+func (m *Model) applyBrowserSelectionToInput() {
+	target := m.browserDir
+	if entry, ok := m.selectedBrowserEntry(); ok && entry.isDir {
+		target = entry.path
+	}
+	m.input.SetValue(filepath.Join(target, suggestedFilename(m.add.url)))
+	m.input.CursorEnd()
+}
+
+func (m *Model) selectedBrowserEntry() (browserEntry, bool) {
+	if len(m.browserEntries) == 0 || m.browserSelected < 0 || m.browserSelected >= len(m.browserEntries) {
+		return browserEntry{}, false
+	}
+	return m.browserEntries[m.browserSelected], true
+}
+
+func (m *Model) browserHint() string {
+	return "up/down move  right enter dir  left parent  tab use directory  enter confirm path"
+}
+
+func (m *Model) browserPathLabel() string {
+	return fmt.Sprintf("Browsing from home: %s", m.browserDir)
+}
+
+func (m *Model) browserPageSize() int {
+	if m.height <= 0 {
+		return 10
+	}
+	pageSize := m.height - 20
+	if pageSize < 5 {
+		return 5
+	}
+	if pageSize > 20 {
+		return 20
+	}
+	return pageSize
+}
+
+func (m *Model) ensureBrowserSelectionVisible() {
+	pageSize := m.browserPageSize()
+	if m.browserSelected < m.browserOffset {
+		m.browserOffset = m.browserSelected
+	}
+	if m.browserSelected >= m.browserOffset+pageSize {
+		m.browserOffset = m.browserSelected - pageSize + 1
+	}
+	if m.browserOffset < 0 {
+		m.browserOffset = 0
+	}
+	maxOffset := len(m.browserEntries) - pageSize
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.browserOffset > maxOffset {
+		m.browserOffset = maxOffset
+	}
+}
+
+func (m *Model) visibleBrowserEntries() []browserEntry {
+	pageSize := m.browserPageSize()
+	if len(m.browserEntries) <= pageSize {
+		return m.browserEntries
+	}
+	start := m.browserOffset
+	end := start + pageSize
+	if end > len(m.browserEntries) {
+		end = len(m.browserEntries)
+	}
+	return m.browserEntries[start:end]
+}
+
+func (m *Model) browserPaginationLabel() string {
+	if len(m.browserEntries) == 0 {
+		return "0/0"
+	}
+	start := m.browserOffset + 1
+	end := m.browserOffset + len(m.visibleBrowserEntries())
+	return fmt.Sprintf("showing %d-%d of %d", start, end, len(m.browserEntries))
+}
+
+
+===== File: internal/tui/commands.go =====
+package tui
+
+import (
+	"fmt"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Paraspandey-debugs/Relay/internal/core/download"
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+)
+
+func addDownloadCmd(mgr *manager.Manager, url, dst string, opts download.Options) tea.Cmd {
+	return func() tea.Msg {
+		id, err := mgr.Add(manager.AddRequest{
+			URL:         url,
+			Destination: dst,
+			Options:     opts,
+		})
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		return actionResultMsg{info: fmt.Sprintf("added %s", shortID(id))}
+	}
+}
+
+func pauseCmd(mgr *manager.Manager, id string) tea.Cmd {
+	return func() tea.Msg {
+		err := mgr.Pause(id)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		return actionResultMsg{info: fmt.Sprintf("paused %s", shortID(id))}
+	}
+}
+
+func resumeCmd(mgr *manager.Manager, id string) tea.Cmd {
+	return func() tea.Msg {
+		err := mgr.Resume(id)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		return actionResultMsg{info: fmt.Sprintf("resumed %s", shortID(id))}
+	}
+}
+
+func removeCmd(mgr *manager.Manager, id string, cleanup bool) tea.Cmd {
+	return func() tea.Msg {
+		err := mgr.Remove(id, cleanup)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		return actionResultMsg{info: fmt.Sprintf("removed %s", shortID(id))}
+	}
+}
+
+func reorderQueueCmd(mgr *manager.Manager, queue []string) tea.Cmd {
+	return func() tea.Msg {
+		err := mgr.ReorderQueue(queue)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		return actionResultMsg{info: "queue reordered"}
+	}
+}
+
+
+===== File: internal/tui/detail_component.go =====
+package tui
+
+import (
+	"fmt"
+
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// JobSelectedMsg should be dispatched by the parent component when selection changes.
+type JobSelectedMsg *manager.DownloadRecord
+
+// DetailComponent manages the right pane detailed view
+type DetailComponent struct {
+	width, height int
+	job           *manager.DownloadRecord // Passed down dynamically by Parent or self-managed
+	theme         Theme
+	styles        styles
+}
+
+func NewDetailComponent(th Theme, st styles) DetailComponent {
+	return DetailComponent{
+		theme:  th,
+		styles: st,
+	}
+}
+
+func (m DetailComponent) Init() tea.Cmd {
+	return nil
+}
+
+func (m DetailComponent) Update(msg tea.Msg) (DetailComponent, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+	case JobSelectedMsg:
+		m.job = msg
+	}
+	return m, nil
+}
+
+func (m DetailComponent) View() string {
+	lineWidth := m.width - 2
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+
+	if m.job == nil {
+		empty := m.styles.CardMuted.Copy().Width(lineWidth).Render("No active selection.")
+		return m.styles.RightPane.Width(m.width).Height(m.height).Render(empty)
+	}
+
+	item := *m.job
+
+	wrapWidth := lineWidth
+	if wrapWidth < 12 {
+		wrapWidth = 12
+	}
+	wrap := lipgloss.NewStyle().Width(wrapWidth)
+
+	title := m.styles.CardLabel.Copy().Width(lineWidth).Render("Detailed Overview")
+	id := m.styles.CardMuted.Copy().Width(lineWidth).Render("ID:   " + item.ID)
+	url := m.styles.CardMuted.Render(wrap.Render("URL:  " + item.URL))
+	path := m.styles.CardMuted.Render(wrap.Render("Path: " + item.Destination))
+	statusLine := lipgloss.JoinHorizontal(lipgloss.Top, m.styles.CardMuted.Render("Status: "), statusPill(item.Status, m.styles))
+	status := m.styles.CardMuted.Copy().Width(lineWidth).Render(statusLine)
+
+	var detailLines []string
+	if item.Status == manager.StatusDownloading {
+		detailLines = []string{
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Progress: %s / %s (%s)", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), progressPercent(item.Progress))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Speed:    %s", humanSpeed(item.Progress.SpeedBps))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("ETA:      %s", humanETA(item.Progress.ETA))),
+		}
+	} else if item.Status == manager.StatusCompleted {
+		detailLines = []string{
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Completed:  %s", totalLabel(item.Progress.Total))),
+			m.styles.CardMuted.Copy().Width(lineWidth).Render(fmt.Sprintf("Time taken: %s", humanDuration(completedDuration(item)))),
+		}
+	}
+
+	lines := []string{title, id, url, path, status}
+	lines = append(lines, detailLines...)
+
+	if item.Error != "" {
+		lines = append(lines, m.styles.CardError.Copy().Width(lineWidth).Render(wrap.Render("Error: "+item.Error)))
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	return m.styles.RightPane.Width(m.width).Height(m.height).Render(content)
+}
+
+
+===== File: internal/tui/doc.go =====
+package tui
+
+// Package tui provides a Bubble Tea terminal interface for the Relay download manager.
+
+
+===== File: internal/tui/jobs_list_component.go =====
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/progress"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+)
+
+// JobsListComponent manages the left pane
+type JobsListComponent struct {
+	width, height int
+	jobs          map[string]*manager.DownloadRecord
+	order         []string // maintains order
+	queue         []string
+	selected      int
+	activeTab     listTab
+	searchQuery   string
+	searchActive  bool
+	progressModel progress.Model
+
+	theme  Theme
+	styles styles
+}
+
+func NewJobsList(th Theme, st styles) JobsListComponent {
+	return JobsListComponent{
+		jobs:          make(map[string]*manager.DownloadRecord),
+		order:         make([]string, 0),
+		queue:         make([]string, 0),
+		theme:         th,
+		styles:        st,
+		progressModel: progress.New(progress.WithDefaultGradient(), progress.WithoutPercentage()),
+	}
+}
+
+func (m JobsListComponent) Init() tea.Cmd {
+	return nil
+}
+
+func (m JobsListComponent) Update(msg tea.Msg) (JobsListComponent, tea.Cmd) {
+	switch msg := msg.(type) {
+	case manager.Event:
+		// Diff-based state update!
+		if job, exists := m.jobs[msg.ID]; exists {
+			job.Status = msg.Status
+			if msg.Progress != nil {
+				job.Progress = *msg.Progress
+			}
+			if msg.Error != "" {
+				job.Error = msg.Error
+			}
+			job.UpdatedAt = msg.At
+		} else {
+			// New job
+			newJob := manager.DownloadRecord{
+				ID:        msg.ID,
+				Status:    msg.Status,
+				UpdatedAt: msg.At,
+			}
+			if msg.Progress != nil {
+				newJob.Progress = *msg.Progress
+			}
+			m.jobs[msg.ID] = &newJob
+			m.order = append(m.order, msg.ID)
+		}
+		// ensure selection is valid
+		m.ensureSelection()
+
+	case updateFullStateMsg: // custom internal message for full resync sync
+		m.order = nil
+		for _, item := range msg.items {
+			itemCopy := item
+			m.jobs[item.ID] = &itemCopy
+			m.order = append(m.order, item.ID)
+		}
+		m.queue = msg.queue
+		m.ensureSelection()
+	}
+	return m, nil
+}
+
+func (m *JobsListComponent) MoveSelection(delta int) {
+	if delta < 0 && m.selected > 0 {
+		m.selected--
+	} else if delta > 0 && m.selected < len(m.visibleItems())-1 {
+		m.selected++
+	}
+	m.ensureSelection()
+}
+
+func (m *JobsListComponent) SetTab(t listTab) {
+	m.activeTab = t
+	m.ensureSelection()
+}
+
+func (m *JobsListComponent) NextTab() {
+	m.activeTab = (m.activeTab + 1) % 3
+	m.ensureSelection()
+}
+
+func (m *JobsListComponent) ensureSelection() {
+	vis := m.visibleItems()
+	if len(vis) == 0 {
+		m.selected = 0
+		return
+	}
+	if m.selected >= len(vis) {
+		m.selected = len(vis) - 1
+	}
+	if m.selected < 0 {
+		m.selected = 0
+	}
+}
+
+func (m JobsListComponent) visibleItems() []manager.DownloadRecord {
+	var out []manager.DownloadRecord
+	q := strings.ToLower(strings.TrimSpace(m.searchQuery))
+	for _, id := range m.order {
+		if job, ok := m.jobs[id]; ok {
+			if !matchesTab(job.Status, m.activeTab) {
+				continue
+			}
+			if q != "" && !strings.Contains(strings.ToLower(job.ID+" "+job.URL+" "+job.Destination), q) {
+				continue
+			}
+			out = append(out, *job)
+		}
+	}
+	return out
+}
+
+func (m JobsListComponent) SelectedID() string {
+	vis := m.visibleItems()
+	if len(vis) == 0 || m.selected < 0 || m.selected >= len(vis) {
+		return ""
+	}
+	return vis[m.selected].ID
+}
+
+func (m JobsListComponent) SelectedJob() *manager.DownloadRecord {
+	id := m.SelectedID()
+	if id == "" {
+		return nil
+	}
+	return m.jobs[id]
+}
+
+func (m JobsListComponent) View() string {
+	vis := m.visibleItems()
+
+	var b strings.Builder
+
+	// Tabs
+	tabsView := m.renderTabs() + "\n\n"
+	queueView := m.renderQueue()
+	b.WriteString(tabsView)
+
+	// Pagination logic
+	// Calculate available height for items
+	// m.height is OUTER height of LeftPane. LeftPane has Border=2, Padding(1,1)=2 -> Total 4
+	innerAvail := m.height - 4
+	used := lipgloss.Height(tabsView) + lipgloss.Height(queueView) + 1 // +1 for spacing
+	itemsHeightAvail := innerAvail - used
+	if itemsHeightAvail < 5 {
+		itemsHeightAvail = 5
+	} // Fallback to avoid panic
+
+	// Each row is approximately 4 lines tall (1 top border, 1 text, 1 prog, 1 bottom margin/border)
+	itemHeight := 4
+	maxItems := itemsHeightAvail / itemHeight
+	if maxItems < 1 {
+		maxItems = 1
+	}
+
+	if len(vis) == 0 {
+		b.WriteString(m.styles.CardMuted.Render("No downloads in this tab. Press 'a' to add."))
+	} else {
+		// Calculate slice bounds to keep selected in view
+		start := 0
+		if len(vis) > maxItems {
+			start = m.selected - (maxItems / 2)
+			if start < 0 {
+				start = 0
+			}
+			if start+maxItems > len(vis) {
+				start = len(vis) - maxItems
+			}
+		}
+		end := start + maxItems
+		if end > len(vis) {
+			end = len(vis)
+		}
+
+		for i := start; i < end; i++ {
+			selected := i == m.selected
+			b.WriteString(m.renderRow(vis[i], selected))
+			b.WriteString("\n")
+		}
+
+		if start > 0 {
+			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d above", start)))
+			b.WriteString("\n")
+		}
+		if end < len(vis) {
+			b.WriteString(m.styles.CardMuted.Render(fmt.Sprintf("...and %d below", len(vis)-end)))
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n")
+	b.WriteString(queueView)
+
+	out := m.styles.LeftPane.Width(m.width).Height(m.height).Render(b.String())
+	return out
+}
+
+func (m *JobsListComponent) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+}
+
+func (m JobsListComponent) renderTabs() string {
+	renderTab := func(label string, count int, tab listTab) string {
+		text := fmt.Sprintf(" %s (%d) ", label, count)
+		if m.activeTab == tab {
+			return m.styles.StatusActive.Copy().MarginRight(1).Render(text)
+		}
+		inactiveStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground)).Background(lipgloss.Color(m.theme.SelectedCard)).Padding(0, 1).MarginRight(1)
+		return inactiveStyle.Render(text)
+	}
+
+	queued, active, done := 0, 0, 0
+	for _, j := range m.jobs {
+		switch {
+		case matchesTab(j.Status, tabQueued):
+			queued++
+		case matchesTab(j.Status, tabActive):
+			active++
+		case matchesTab(j.Status, tabDone):
+			done++
+		}
+	}
+	row := renderTab("Queued", queued, tabQueued) + renderTab("Active", active, tabActive) + renderTab("Done", done, tabDone)
+	lineWidth := m.width - 4
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color(m.theme.Card)).Width(lineWidth).Render(row)
+}
+
+func (m JobsListComponent) renderQueue() string {
+	lineWidth := m.width - 4
+	if lineWidth < 1 {
+		lineWidth = 1
+	}
+	if len(m.queue) == 0 {
+		return m.styles.CardMuted.Copy().Width(lineWidth).Render("Queue: empty")
+	}
+	parts := make([]string, 0, len(m.queue))
+	for i, id := range m.queue {
+		parts = append(parts, fmt.Sprintf("%d:%s", i+1, shortID(id)))
+	}
+	label := m.styles.CardLabel.Copy().Width(lineWidth).Render("Queue")
+	body := m.styles.CardMuted.Copy().Width(lineWidth).Render(strings.Join(parts, "  "))
+	return lipgloss.JoinVertical(lipgloss.Left, label, body)
+}
+
+func (m JobsListComponent) renderRow(item manager.DownloadRecord, selected bool) string {
+	width := m.width - 8
+	if width < 10 {
+		width = 10
+	}
+	filename := item.Destination
+	if filename == "" {
+		filename = item.URL
+	}
+	status := statusPill(item.Status, m.styles)
+
+	var metrics string
+	if item.Status == manager.StatusCompleted {
+		metrics = fmt.Sprintf("%s / %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total))
+	} else {
+		metrics = fmt.Sprintf("%s / %s • %s • ETA %s", humanBytes(item.Progress.Downloaded), totalLabel(item.Progress.Total), humanSpeed(item.Progress.SpeedBps), humanETA(item.Progress.ETA))
+	}
+
+	var titleStyle, mutedStyle lipgloss.Style
+	spacerBg := lipgloss.Color(m.theme.Card)
+	if selected {
+		titleStyle = m.styles.SelectedCardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
+		mutedStyle = m.styles.SelectedCardMuted
+		spacerBg = lipgloss.Color(m.theme.SelectedCard)
+	} else {
+		titleStyle = m.styles.CardTitle.Copy().Width(width - lipgloss.Width(status) - 4)
+		mutedStyle = m.styles.CardMuted
+	}
+	left := titleStyle.Render(filename)
+	right := status
+
+	spacerWidth := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if spacerWidth < 1 {
+		spacerWidth = 1
+	}
+	spacer := lipgloss.NewStyle().Background(spacerBg).Width(spacerWidth).Render("")
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, left, spacer, right)
+
+	metricsRendered := mutedStyle.Render(metrics)
+	progWidth := width - lipgloss.Width(metricsRendered) - 4
+	if progWidth < 10 {
+		progWidth = 10
+	}
+
+	m.progressModel.Width = progWidth
+	bar := m.progressModel.ViewAs(progressRatio(item.Progress))
+
+	spacer2Width := width - lipgloss.Width(bar) - lipgloss.Width(metricsRendered)
+	if spacer2Width < 1 {
+		spacer2Width = 1
+	}
+	spacer2 := lipgloss.NewStyle().Background(spacerBg).Width(spacer2Width).Render("")
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, bar, spacer2, metricsRendered)
+
+	card := lipgloss.JoinVertical(lipgloss.Left, topRow, bottomRow)
+
+	// Use themed card styles so background and borders match the overall theme
+	if selected {
+		// SelectedCard already contains Background and ThickBorder
+		return m.styles.SelectedCard.MarginBottom(1).Render(card)
+	}
+	// DownloadCard contains RoundedBorder, Background and padding
+	return m.styles.DownloadCard.MarginBottom(1).Render(card)
+}
+
+func statusPill(s manager.Status, st styles) string {
+	text := statusLabel(s)
+	switch s {
+	case manager.StatusCompleted:
+		return st.StatusDone.Render(text)
+	case manager.StatusDownloading:
+		return st.StatusActive.Render(text)
+	case manager.StatusPaused:
+		return st.StatusPaused.Render(text)
+	case manager.StatusErrored:
+		return st.StatusError.Render(text)
+	default:
+		return st.StatusQueued.Render(text)
+	}
+}
+
+// custom internal message for full resync
+type updateFullStateMsg struct {
+	items []manager.DownloadRecord
+	queue []string
+}
+
+// GetTotal returns the total number of jobs.
+func (m JobsListComponent) GetTotal() int {
+	return len(m.jobs)
+}
+
+// GetQueued returns the number of jobs that are queued, paused, or errored.
+func (m JobsListComponent) GetQueued() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabQueued) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetActive returns the number of jobs that are downloading.
+func (m JobsListComponent) GetActive() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabActive) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetDone returns the number of completed jobs.
+func (m JobsListComponent) GetDone() int {
+	count := 0
+	for _, job := range m.jobs {
+		if matchesTab(job.Status, tabDone) {
+			count++
+		}
+	}
+	return count
+}
+
+// GetAggregateSpeed returns the sum of download speeds of active jobs.
+func (m JobsListComponent) GetAggregateSpeed() float64 {
+	var total float64
+	for _, job := range m.jobs {
+		if job.Status == manager.StatusDownloading && job.Progress.SpeedBps > 0 {
+			total += job.Progress.SpeedBps
+		}
+	}
+	return total
+}
+
+// Queue returns the current queue order.
+func (m JobsListComponent) Queue() []string {
+	return m.queue
+}
+
+
+===== File: internal/tui/keys.go =====
+package tui
+
+import (
+	"github.com/charmbracelet/bubbles/key"
+)
+
+type keyMap struct {
+	Up            key.Binding
+	Down          key.Binding
+	TabQueued     key.Binding
+	TabActive     key.Binding
+	TabDone       key.Binding
+	NextTab       key.Binding
+	Search        key.Binding
+	Log           key.Binding
+	Confirm       key.Binding
+	Cancel        key.Binding
+	LogTop        key.Binding
+	LogBottom     key.Binding
+	Add           key.Binding
+	Pause         key.Binding
+	Resume        key.Binding
+	Remove        key.Binding
+	Settings      key.Binding
+	MoveQueueUp   key.Binding
+	MoveQueueDown key.Binding
+	Refresh       key.Binding
+	Help          key.Binding
+	Quit          key.Binding
+}
+
+func defaultKeys() keyMap {
+	return keyMap{
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("", ""),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("j/down", "move down"),
+		),
+		TabQueued: key.NewBinding(
+			key.WithKeys("1"),
+			key.WithHelp("1", "queued tab"),
+		),
+		TabActive: key.NewBinding(
+			key.WithKeys("2"),
+			key.WithHelp("2", "active tab"),
+		),
+		TabDone: key.NewBinding(
+			key.WithKeys("3"),
+			key.WithHelp("3", "done tab"),
+		),
+		NextTab: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "next tab"),
+		),
+		Search: key.NewBinding(
+			key.WithKeys("f"),
+			key.WithHelp("f", "search"),
+		),
+		Log: key.NewBinding(
+			key.WithKeys("l"),
+			key.WithHelp("l", "toggle log"),
+		),
+		Confirm: key.NewBinding(
+			key.WithKeys("y", "enter"),
+			key.WithHelp("y", "confirm"),
+		),
+		Cancel: key.NewBinding(
+			key.WithKeys("n", "esc"),
+			key.WithHelp("n", "cancel"),
+		),
+		LogTop: key.NewBinding(
+			key.WithKeys("g"),
+			key.WithHelp("g", "log top"),
+		),
+		LogBottom: key.NewBinding(
+			key.WithKeys("G"),
+			key.WithHelp("G", "log bottom"),
+		),
+		Add: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "add"),
+		),
+		Pause: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "pause"),
+		),
+		Resume: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "resume"),
+		),
+		Remove: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "remove"),
+		),
+		Settings: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "settings"),
+		),
+		MoveQueueUp: key.NewBinding(
+			key.WithKeys("K"),
+			key.WithHelp("K", "queue up"),
+		),
+		MoveQueueDown: key.NewBinding(
+			key.WithKeys("J"),
+			key.WithHelp("J", "queue down"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("R"),
+			key.WithHelp("R", "refresh"),
+		),
+		Help: key.NewBinding(
+			key.WithKeys("?", "h"),
+			key.WithHelp("?", "toggle help"),
+		),
+		Quit: key.NewBinding(
+			key.WithKeys("ctrl+q", "ctrl+c"),
+			key.WithHelp("ctrl+q", "quit"),
+		),
+	}
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.TabQueued, k.TabActive, k.TabDone, k.Search, k.Log, k.Add, k.Pause, k.Remove, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.TabQueued, k.TabActive, k.TabDone, k.NextTab, k.Search, k.Log, k.Add},
+		{k.Up, k.Down, k.Pause, k.Resume, k.Remove, k.Settings},
+		{k.MoveQueueUp, k.MoveQueueDown, k.Refresh, k.LogTop, k.LogBottom, k.Help, k.Quit},
+	}
+}
+
+
+===== File: internal/tui/model.go =====
+package tui
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"os"
+	"os/user"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/progress"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Paraspandey-debugs/Relay/internal/core/download"
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+)
+
+const relayStartupASCII = `
+
+____  _____ _         _ __   __
+|  _ \| ____| |      / \\ \ / /
+| |_) |  _| | |     / _ \\ V / 
+|  _ <| |___| |___ / ___ \| |  
+|_| \_\_____|_____/_/   \_\_|  
+`
+
+const startupSplashDuration = 1400 * time.Millisecond
+
+type screen int
+
+const (
+	splashScreen screen = iota
+	listScreen
+	addScreen
+	settingsScreen
+)
+
+type addStep int
+
+const (
+	addURLStep addStep = iota
+	addDestinationStep
+)
+
+type listTab int
+
+const (
+	tabQueued listTab = iota
+	tabActive
+	tabDone
+)
+
+func matchesTab(status manager.Status, tab listTab) bool {
+	switch tab {
+	case tabQueued:
+		return status == manager.StatusQueued || status == manager.StatusPaused || status == manager.StatusErrored
+	case tabActive:
+		return status == manager.StatusDownloading
+	case tabDone:
+		return status == manager.StatusCompleted
+	default:
+		return true
+	}
+}
+
+type actionResultMsg struct {
+	info string
+	err  error
+}
+
+type tickMsg time.Time
+type splashDoneMsg struct{}
+
+type Option func(*Model)
+
+func WithTheme(name string) Option {
+	return func(m *Model) {
+		if th, ok := ThemeByName(name); ok {
+			m.theme = th
+		}
+	}
+}
+
+func WithThemeOverrides(overrides map[string]string) Option {
+	return func(m *Model) {
+		m.theme = ApplyThemeOverrides(m.theme, overrides)
+	}
+}
+
+func WithCleanupOnRemove(enabled bool) Option {
+	return func(m *Model) {
+		m.cleanupOnRemove = enabled
+	}
+}
+
+func WithDefaultAddOptions(opts download.Options) Option {
+	return func(m *Model) {
+		m.defaultAddOptions = opts
+	}
+}
+
+func WithTickEvery(d time.Duration) Option {
+	return func(m *Model) {
+		if d > 0 {
+			m.tickEvery = d
+		}
+	}
+}
+
+type Model struct {
+	ctx context.Context
+	mgr *manager.Manager
+
+	// items, queue, selected removed – now delegated to jobsList
+	width  int
+	height int
+
+	keys keyMap
+	help help.Model
+
+	progress progress.Model
+
+	screen   screen
+	showHelp bool
+
+	input         textinput.Model
+	searchInput   textinput.Model
+	settingsInput textinput.Model
+	step          addStep
+	add           addDraft
+	searchActive  bool
+	searchQuery   string
+
+	message string
+	errMsg  string
+
+	messageUntil time.Time
+	errUntil     time.Time
+
+	theme  Theme
+	styles styles
+	now    time.Time
+
+	// progress smoothing state
+	cleanupOnRemove   bool
+	defaultAddOptions download.Options
+	tickEvery         time.Duration
+	progressMemo      map[string]memoProgress
+	homeDir           string
+	recentDir         string
+	browserDir        string
+	browserSelected   int
+	browserOffset     int
+	browserEntries    []browserEntry
+
+	settingsCursor  int
+	settingsEditing bool
+	settingsFields  []settingField
+
+	showLogPanel    bool
+	logCursor       int
+	logEntries      []string
+	removeConfirm   bool
+	pendingRemoveID string
+
+	jobsList JobsListComponent
+	details  DetailComponent
+	stats    StatsComponent
+}
+
+type memoProgress struct {
+	SpeedBps float64
+	ETA      time.Duration
+	At       time.Time
+}
+
+type addDraft struct {
+	url string
+	dst string
+}
+
+type browserEntry struct {
+	name  string
+	path  string
+	isDir bool
+}
+
+func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model {
+	homeDir := resolveBrowserHomeDir()
+
+	in := textinput.New()
+	in.Prompt = "> "
+	in.Placeholder = "https://example.com/file.iso"
+	in.CharLimit = 4096
+	in.Blur()
+
+	settingsIn := textinput.New()
+	settingsIn.Prompt = "> "
+	settingsIn.CharLimit = 256
+	settingsIn.Blur()
+
+	searchIn := textinput.New()
+	searchIn.Prompt = "search> "
+	searchIn.Placeholder = "type to filter by URL/path/ID"
+	searchIn.CharLimit = 256
+	searchIn.Blur()
+
+	m := &Model{
+		ctx:  ctx,
+		mgr:  mgr,
+		keys: defaultKeys(),
+		help: help.New(),
+		progress: progress.New(
+			progress.WithDefaultGradient(),
+			progress.WithoutPercentage(),
+		),
+		screen:          splashScreen,
+		input:           in,
+		searchInput:     searchIn,
+		settingsInput:   settingsIn,
+		theme:           OceanTheme,
+		cleanupOnRemove: true,
+		tickEvery:       250 * time.Millisecond,
+		now:             time.Now(),
+		progressMemo:    make(map[string]memoProgress),
+		homeDir:         homeDir,
+		recentDir:       homeDir,
+		browserDir:      homeDir,
+	}
+	m.appendLog("relay started")
+	for _, opt := range opts {
+		opt(m)
+	}
+	m.styles = newStyles(m.theme)
+	m.help.ShowAll = false
+	m.jobsList = NewJobsList(m.theme, m.styles)
+	m.details = NewDetailComponent(m.theme, m.styles)
+	m.stats = NewStatsComponent(m.theme, m.styles)
+	m.syncBrowserTo(m.recentDir)
+
+	// Load initial state into jobs list component
+	m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: mgr.List(), queue: mgr.Queue()})
+	m.jobsList.SetTab(tabQueued)
+	m.syncStats()
+
+	// Apply explicit backgrounds to text inputs to prevent terminal default bleed
+	inBg := lipgloss.Color(m.theme.Background)
+	inFg := lipgloss.Color(m.theme.Foreground)
+	inAccent := lipgloss.Color(m.theme.Accent)
+
+	inStyle := lipgloss.NewStyle().Foreground(inFg).Background(inBg)
+	promptStyle := lipgloss.NewStyle().Foreground(inAccent).Background(inBg)
+
+	m.input.TextStyle, m.input.PromptStyle, m.input.Cursor.Style = inStyle, promptStyle, promptStyle
+	m.searchInput.TextStyle, m.searchInput.PromptStyle, m.searchInput.Cursor.Style = inStyle, promptStyle, promptStyle
+	m.settingsInput.TextStyle, m.settingsInput.PromptStyle, m.settingsInput.Cursor.Style = inStyle, promptStyle, promptStyle
+	return m
+}
+
+func Run(ctx context.Context, mgr *manager.Manager, opts ...Option) error {
+	m := NewModel(ctx, mgr, opts...)
+	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-mgr.Events():
+				if !ok {
+					return
+				}
+				p.Send(event)
+			}
+		}
+	}()
+
+	_, err := p.Run()
+	return err
+}
+
+func (m *Model) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, tickCmd(m.tickEvery), splashDoneCmd(startupSplashDuration))
+}
+
+// New helper to update stats from the jobs list component
+func (m *Model) syncStats() {
+	total := m.jobsList.GetTotal()
+	queued := m.jobsList.GetQueued()
+	active := m.jobsList.GetActive()
+	done := m.jobsList.GetDone()
+	speed := m.jobsList.GetAggregateSpeed()
+	m.stats.UpdateStats(total, queued, active, done, speed)
+}
+
+func (m *Model) currentItem() (manager.DownloadRecord, bool) {
+	job := m.jobsList.SelectedJob()
+	if job == nil {
+		return manager.DownloadRecord{}, false
+	}
+	return *job, true
+}
+
+func (m *Model) appendLog(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
+	line := time.Now().Format("15:04:05") + "  " + entry
+	m.logEntries = append(m.logEntries, line)
+	if len(m.logEntries) > 200 {
+		m.logEntries = m.logEntries[len(m.logEntries)-200:]
+	}
+	m.logCursor = len(m.logEntries) - 1
+	if m.logCursor < 0 {
+		m.logCursor = 0
+	}
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+func statusLabel(s manager.Status) string {
+	switch s {
+	case manager.StatusQueued:
+		return "QUEUED"
+	case manager.StatusDownloading:
+		return "DOWNLOADING"
+	case manager.StatusPaused:
+		return "PAUSED"
+	case manager.StatusCompleted:
+		return "COMPLETED"
+	case manager.StatusErrored:
+		return "ERROR"
+	default:
+		return strings.ToUpper(string(s))
+	}
+}
+
+func progressPercent(p manager.ProgressInfo) string {
+	if p.Total <= 0 {
+		return "-"
+	}
+	pct := (float64(p.Downloaded) / float64(p.Total)) * 100
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return fmt.Sprintf("%.1f%%", pct)
+}
+
+func humanBytes(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%dB", n)
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	v := float64(n)
+	i := 0
+	for v >= 1024 && i < len(units)-1 {
+		v /= 1024
+		i++
+	}
+	return fmt.Sprintf("%.1f%s", v, units[i])
+}
+
+func humanSpeed(bps float64) string {
+	if bps <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%s/s", humanBytes(int64(bps)))
+}
+
+func humanETA(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d > 24*time.Hour {
+		return ">1d"
+	}
+	return d.Round(time.Second).String()
+}
+
+func humanDuration(d time.Duration) string {
+	if d <= 0 {
+		return "-"
+	}
+	if d < time.Second {
+		return "<1s"
+	}
+	return d.Round(time.Second).String()
+}
+
+func tickCmd(d time.Duration) tea.Cmd {
+	if d <= 0 {
+		d = 250 * time.Millisecond
+	}
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func splashDoneCmd(d time.Duration) tea.Cmd {
+	if d <= 0 {
+		d = startupSplashDuration
+	}
+	return tea.Tick(d, func(time.Time) tea.Msg {
+		return splashDoneMsg{}
+	})
+}
+
+func resolveBrowserHomeDir() string {
+	if sudoUser := strings.TrimSpace(os.Getenv("SUDO_USER")); sudoUser != "" {
+		if resolvedUser, err := user.Lookup(sudoUser); err == nil && resolvedUser.HomeDir != "" {
+			return resolvedUser.HomeDir
+		}
+	}
+
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err == nil && homeDir != "" {
+		return homeDir
+	}
+
+	return "."
+}
+
+func suggestedFilename(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "download.bin"
+	}
+	name := path.Base(parsed.Path)
+	if name == "." || name == "/" || name == "" {
+		return "download.bin"
+	}
+	return name
+}
+
+func (m *Model) beginDestinationSelection() {
+	m.step = addDestinationStep
+	m.syncBrowserTo(m.recentDir)
+	m.input.SetValue(filepath.Join(m.browserDir, suggestedFilename(m.add.url)))
+	m.input.Placeholder = filepath.Join(m.browserDir, suggestedFilename(m.add.url))
+	m.errMsg = ""
+}
+
+
+===== File: internal/tui/settings.go =====
+package tui
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Paraspandey-debugs/Relay/internal/core/download"
+)
+
+type settingField struct {
+	label string
+	value string // current string value (shown/edited)
+	kind  string // "int", "duration", "bytes", "bool"
+	hint  string
+}
+
+// defaultedOpts fills zero-values in opts with the library defaults so the
+// settings screen always shows a sensible baseline.
+func defaultedOpts(opts download.Options) download.Options {
+	def := download.DefaultOptions()
+	if opts.Workers == 0 {
+		opts.Workers = def.Workers
+	}
+	if opts.MinChunkSize == 0 {
+		opts.MinChunkSize = def.MinChunkSize
+	}
+	if opts.MaxChunkSize == 0 {
+		opts.MaxChunkSize = def.MaxChunkSize
+	}
+	if opts.Timeout == 0 {
+		opts.Timeout = def.Timeout
+	}
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = def.MaxRetries
+	}
+	if opts.BaseBackoff == 0 {
+		opts.BaseBackoff = def.BaseBackoff
+	}
+	if opts.MaxBackoff == 0 {
+		opts.MaxBackoff = def.MaxBackoff
+	}
+	return opts
+}
+
+func buildSettingsFields(opts download.Options) []settingField {
+	opts = defaultedOpts(opts)
+	return []settingField{
+		{
+			label: "Workers",
+			value: strconv.Itoa(opts.Workers),
+			kind:  "int",
+			hint:  "parallel chunk workers per download (0 = library default)",
+		},
+		{
+			label: "Min chunk size",
+			value: humanBytes(opts.MinChunkSize),
+			kind:  "bytes",
+			hint:  "minimum HTTP range chunk size  (e.g. 2.0MB, 524KB)",
+		},
+		{
+			label: "Max chunk size",
+			value: humanBytes(opts.MaxChunkSize),
+			kind:  "bytes",
+			hint:  "maximum HTTP range chunk size  (e.g. 8.0MB)",
+		},
+		{
+			label: "Timeout",
+			value: opts.Timeout.String(),
+			kind:  "duration",
+			hint:  "per-request HTTP timeout  (e.g. 30s, 1m30s)",
+		},
+		{
+			label: "Max retries",
+			value: strconv.Itoa(opts.MaxRetries),
+			kind:  "int",
+			hint:  "retry attempts on failure",
+		},
+		{
+			label: "Base backoff",
+			value: opts.BaseBackoff.String(),
+			kind:  "duration",
+			hint:  "initial delay between retries  (e.g. 500ms)",
+		},
+		{
+			label: "Max backoff",
+			value: opts.MaxBackoff.String(),
+			kind:  "duration",
+			hint:  "maximum delay between retries  (e.g. 20s)",
+		},
+		{
+			label: "Force single",
+			value: strconv.FormatBool(opts.ForceSingle),
+			kind:  "bool",
+			hint:  "disable parallel chunk downloading  (true / false)",
+		},
+		{
+			label: "No resume",
+			value: strconv.FormatBool(opts.NoResume),
+			kind:  "bool",
+			hint:  "always restart downloads from scratch  (true / false)",
+		},
+	}
+}
+
+// fieldsToOpts reconstructs a download.Options from the edited settings fields.
+func fieldsToOpts(fields []settingField) download.Options {
+	opts := download.DefaultOptions()
+	for _, f := range fields {
+		switch f.label {
+		case "Workers":
+			if v, err := strconv.Atoi(strings.TrimSpace(f.value)); err == nil {
+				opts.Workers = v
+			}
+		case "Min chunk size":
+			if v, err := parseBytes(f.value); err == nil && v > 0 {
+				opts.MinChunkSize = v
+			}
+		case "Max chunk size":
+			if v, err := parseBytes(f.value); err == nil && v > 0 {
+				opts.MaxChunkSize = v
+			}
+		case "Timeout":
+			if v, err := time.ParseDuration(strings.TrimSpace(f.value)); err == nil && v > 0 {
+				opts.Timeout = v
+			}
+		case "Max retries":
+			if v, err := strconv.Atoi(strings.TrimSpace(f.value)); err == nil {
+				opts.MaxRetries = v
+			}
+		case "Base backoff":
+			if v, err := time.ParseDuration(strings.TrimSpace(f.value)); err == nil && v > 0 {
+				opts.BaseBackoff = v
+			}
+		case "Max backoff":
+			if v, err := time.ParseDuration(strings.TrimSpace(f.value)); err == nil && v > 0 {
+				opts.MaxBackoff = v
+			}
+		case "Force single":
+			if v, err := strconv.ParseBool(strings.TrimSpace(f.value)); err == nil {
+				opts.ForceSingle = v
+			}
+		case "No resume":
+			if v, err := strconv.ParseBool(strings.TrimSpace(f.value)); err == nil {
+				opts.NoResume = v
+			}
+		}
+	}
+	return opts
+}
+
+// parseBytes parses human-readable byte strings like "2.0MB", "512KB", or
+// plain integer strings.
+func parseBytes(s string) (int64, error) {
+	upper := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(s), " ", ""))
+	suffixes := []struct {
+		suffix string
+		mult   int64
+	}{
+		{"TB", 1 << 40},
+		{"GB", 1 << 30},
+		{"MB", 1 << 20},
+		{"KB", 1 << 10},
+		{"B", 1},
+	}
+	for _, entry := range suffixes {
+		if strings.HasSuffix(upper, entry.suffix) {
+			numStr := strings.TrimSuffix(upper, entry.suffix)
+			n, err := strconv.ParseFloat(strings.TrimSpace(numStr), 64)
+			if err != nil {
+				return 0, fmt.Errorf("invalid size %q", s)
+			}
+			return int64(n * float64(entry.mult)), nil
+		}
+	}
+	return strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+}
+
+func (m *Model) validateSettingValue(idx int, val string) error {
+	f := m.settingsFields[idx]
+	switch f.kind {
+	case "int":
+		_, err := strconv.Atoi(strings.TrimSpace(val))
+		return err
+	case "duration":
+		d, err := time.ParseDuration(strings.TrimSpace(val))
+		if err != nil {
+			return err
+		}
+		if d < 0 {
+			return fmt.Errorf("duration must be positive")
+		}
+		return nil
+	case "bytes":
+		v, err := parseBytes(val)
+		if err != nil {
+			return err
+		}
+		if v <= 0 {
+			return fmt.Errorf("size must be positive")
+		}
+		return nil
+	case "bool":
+		_, err := strconv.ParseBool(strings.TrimSpace(val))
+		return err
+	}
+	return nil
+}
+
+// openSettings transitions to the settings screen.
+func (m *Model) openSettings() {
+	m.settingsFields = buildSettingsFields(m.defaultAddOptions)
+	m.settingsCursor = 0
+	m.settingsEditing = false
+	m.input.Blur()
+	m.settingsInput.SetValue("")
+	m.settingsInput.Placeholder = ""
+	m.settingsInput.Blur()
+	m.errMsg = ""
+	m.screen = settingsScreen
+}
+
+// renderSettings draws the settings screen.
+func (m *Model) renderSettings() string {
+	var lines []string
+	lines = append(lines,
+		m.styles.Header.Render("Settings"),
+		m.styles.Subtle.Render("↑/↓ navigate · Enter/e edit field · Esc back to list"),
+		"",
+	)
+
+	const labelW = 16
+	for i, f := range m.settingsFields {
+		selected := i == m.settingsCursor
+		prefix := "  "
+		if selected {
+			prefix = "> "
+		}
+		label := fmt.Sprintf("%-*s", labelW, f.label)
+
+		if selected && m.settingsEditing {
+			lines = append(lines, prefix+m.styles.Label.Render(label)+"  "+m.settingsInput.View())
+		} else {
+			var styledVal string
+			if selected {
+				styledVal = m.styles.InfoLine.Render(f.value)
+			} else {
+				styledVal = m.styles.Muted.Render(f.value)
+			}
+			lines = append(lines, prefix+m.styles.Label.Render(label)+"  "+styledVal)
+		}
+
+		if selected {
+			lines = append(lines, m.styles.Subtle.Render("    "+f.hint))
+		}
+	}
+
+	if m.errMsg != "" {
+		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg), "")
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// handleSettingsKeys processes key events on the settings screen.
+func (m *Model) handleSettingsKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.settingsEditing {
+		switch msg.String() {
+		case "esc":
+			// Cancel edit — restore the original value visible in the field.
+			m.settingsEditing = false
+			m.settingsInput.SetValue("")
+			m.settingsInput.Placeholder = ""
+			m.settingsInput.Blur()
+			m.errMsg = ""
+			return m, nil
+
+		case "enter":
+			newVal := strings.TrimSpace(m.settingsInput.Value())
+			if err := m.validateSettingValue(m.settingsCursor, newVal); err != nil {
+				m.errMsg = err.Error()
+				m.errUntil = time.Now().Add(5 * time.Second)
+				return m, nil
+			}
+			m.settingsFields[m.settingsCursor].value = newVal
+			m.settingsEditing = false
+			m.settingsInput.SetValue("")
+			m.settingsInput.Placeholder = ""
+			m.settingsInput.Blur()
+			m.errMsg = ""
+			// Apply the full field set immediately so new downloads pick it up.
+			m.defaultAddOptions = fieldsToOpts(m.settingsFields)
+			return m, nil
+
+		default:
+			var cmd tea.Cmd
+			m.settingsInput, cmd = m.settingsInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Navigation / exit when not editing.
+	switch {
+	case key.Matches(msg, m.keys.Up):
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		}
+		return m, nil
+
+	case key.Matches(msg, m.keys.Down):
+		if m.settingsCursor < len(m.settingsFields)-1 {
+			m.settingsCursor++
+		}
+		return m, nil
+
+	case msg.String() == "enter" || msg.String() == "e":
+		m.settingsEditing = true
+		m.settingsInput.SetValue(m.settingsFields[m.settingsCursor].value)
+		m.settingsInput.Placeholder = m.settingsFields[m.settingsCursor].value
+		m.settingsInput.Focus()
+		m.errMsg = ""
+		return m, nil
+
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+
+	case msg.String() == "esc":
+		m.screen = listScreen
+		m.settingsCursor = 0
+		m.settingsEditing = false
+		m.settingsInput.SetValue("")
+		m.settingsInput.Placeholder = ""
+		m.settingsInput.Blur()
+		m.errMsg = ""
+		return m, nil
+	}
+
+	return m, nil
+}
+
+
+===== File: internal/tui/stats_component.go =====
+package tui
+
+import (
+	"fmt"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+type StatsComponent struct {
+	width  int
+	height int
+	theme  Theme
+	styles styles
+
+	queued int
+	active int
+	done   int
+	total  int
+	speed  float64
+}
+
+func NewStatsComponent(th Theme, st styles) StatsComponent {
+	return StatsComponent{
+		theme:  th,
+		styles: st,
+	}
+}
+
+func (m StatsComponent) Init() tea.Cmd {
+	return nil
+}
+
+func (m StatsComponent) Update(msg tea.Msg) (StatsComponent, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+	}
+	return m, nil
+}
+
+func (m *StatsComponent) UpdateStats(total, queued, active, done int, aggSpeed float64) {
+	m.total = total
+	m.queued = queued
+	m.active = active
+	m.done = done
+	m.speed = aggSpeed
+}
+
+func (m StatsComponent) View() string {
+	muted := m.styles.Muted.Render
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Render
+
+	stats := fmt.Sprintf("%s %d   %s %d   %s %d   %s %d   %s %s",
+		muted("items"), m.total,
+		muted("queued"), m.queued,
+		muted("active"), m.active,
+		muted("done"), m.done,
+		muted("throughput"), accent(humanSpeed(m.speed)))
+
+	if m.width > 0 {
+		return m.styles.FooterCard.Width(m.width).Render(stats)
+	}
+	return m.styles.FooterCard.Render(stats)
+}
+
+func (m StatsComponent) HeaderView() string {
+	left := m.styles.Header.Render("Relay Dashboard")
+	subtle := m.styles.Subtle.Render("Production Mode")
+	if m.width > 0 {
+		row := lipgloss.JoinHorizontal(lipgloss.Top, left, subtle)
+		return lipgloss.PlaceHorizontal(
+			m.width,
+			lipgloss.Left,
+			row,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", subtle)
+}
+
+
+===== File: internal/tui/styles.go =====
+package tui
+
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
+
+type Theme struct {
+	Name         string
+	Background   string
+	Foreground   string
+	Accent       string
+	Secondary    string
+	Success      string
+	Warning      string
+	Error        string
+	Muted        string
+	Header       string
+	Card         string
+	SelectedCard string
+}
+
+var OceanTheme = Theme{
+	Name:         "ocean",
+	Background:   "#0D1117",
+	Foreground:   "#E6EDF3",
+	Accent:       "#58A6FF",
+	Secondary:    "#1F6FEB",
+	Success:      "#3FB950",
+	Warning:      "#D29922",
+	Error:        "#F85149",
+	Muted:        "#8B949E",
+	Header:       "#58A6FF",
+	Card:         "#161B22",
+	SelectedCard: "#21262D",
+}
+
+var SunsetTheme = Theme{
+	Name:         "sunset",
+	Background:   "#1C1210",
+	Foreground:   "#F2D7D0",
+	Accent:       "#FF7A59",
+	Secondary:    "#D95A40",
+	Success:      "#52C463",
+	Warning:      "#E6923C",
+	Error:        "#E84A5F",
+	Muted:        "#9E827B",
+	Header:       "#FFA28B",
+	Card:         "#2B1C19",
+	SelectedCard: "#3D2A26",
+}
+
+var MonoTheme = Theme{
+	Name:         "mono",
+	Background:   "#0A0A0A",
+	Foreground:   "#FAFAFA",
+	Accent:       "#E0E0E0",
+	Secondary:    "#737373",
+	Success:      "#A3E635",
+	Warning:      "#FBBF24",
+	Error:        "#F87171",
+	Muted:        "#525252",
+	Header:       "#FFFFFF",
+	Card:         "#171717",
+	SelectedCard: "#262626",
+}
+
+var SurgeTheme = Theme{
+	Name:         "surge",
+	Background:   "#1A1B26",
+	Foreground:   "#C0CAF5",
+	Accent:       "#7AA2F7",
+	Secondary:    "#414868",
+	Success:      "#9ECE6A",
+	Warning:      "#E0AF68",
+	Error:        "#F7768E",
+	Muted:        "#565F89",
+	Header:       "#BB9AF7",
+	Card:         "#24283B",
+	SelectedCard: "#2E3247",
+}
+
+func ThemeByName(name string) (Theme, bool) {
+	switch name {
+	case "ocean":
+		return OceanTheme, true
+	case "sunset":
+		return SunsetTheme, true
+	case "mono":
+		return MonoTheme, true
+	case "surge":
+		return SurgeTheme, true
+	default:
+		return Theme{}, false
+	}
+}
+
+func ApplyThemeOverrides(base Theme, overrides map[string]string) Theme {
+	if len(overrides) == 0 {
+		return base
+	}
+
+	for key, value := range overrides {
+		v := strings.TrimSpace(value)
+		if v == "" {
+			continue
+		}
+
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "background":
+			base.Background = v
+		case "foreground":
+			base.Foreground = v
+		case "accent":
+			base.Accent = v
+		case "secondary":
+			base.Secondary = v
+		case "success":
+			base.Success = v
+		case "warning":
+			base.Warning = v
+		case "error":
+			base.Error = v
+		case "muted":
+			base.Muted = v
+		case "header":
+			base.Header = v
+		case "card":
+			base.Card = v
+		case "selectedcard", "selected-card":
+			base.SelectedCard = v
+		}
+	}
+
+	return base
+}
+
+type styles struct {
+	App               lipgloss.Style
+	Header            lipgloss.Style
+	Subtle            lipgloss.Style
+	Label             lipgloss.Style
+	Muted             lipgloss.Style
+	CardLabel         lipgloss.Style
+	CardMuted         lipgloss.Style
+	CardInfo          lipgloss.Style
+	CardError         lipgloss.Style
+	FooterCard        lipgloss.Style
+	FooterTitle       lipgloss.Style
+	DownloadCard      lipgloss.Style
+	SelectedCard      lipgloss.Style
+	CardTitle         lipgloss.Style
+	SelectedCardTitle lipgloss.Style
+	SelectedCardMuted lipgloss.Style
+	InfoLine          lipgloss.Style
+	ErrorLine         lipgloss.Style
+	StatusDone        lipgloss.Style
+	StatusActive      lipgloss.Style
+	StatusPaused      lipgloss.Style
+	StatusError       lipgloss.Style
+	StatusQueued      lipgloss.Style
+	StatusStarting    lipgloss.Style
+	StatusStopping    lipgloss.Style
+	StatusVerifying   lipgloss.Style
+	LeftPane          lipgloss.Style
+	RightPane         lipgloss.Style
+}
+
+func newStyles(t Theme) styles {
+	bg := lipgloss.Color(t.Background)
+	cardBg := lipgloss.Color(t.Card)
+	selCardBg := lipgloss.Color(t.SelectedCard)
+
+	return styles{
+		App: lipgloss.NewStyle().
+			Background(lipgloss.Color(t.Background)).
+			Foreground(lipgloss.Color(t.Foreground)).
+			Padding(1, 2),
+		Header: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Header)).
+			Background(bg).
+			Bold(true),
+		Subtle: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(bg),
+		Label: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Accent)).
+			Background(bg).
+			Bold(true),
+		Muted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(bg),
+
+		// Card-context styles (for use inside LeftPane/RightPane)
+		CardLabel: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Accent)).Background(cardBg).Bold(true),
+		CardMuted: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Muted)).Background(cardBg),
+		CardInfo:  lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)).Background(cardBg),
+		CardError: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Error)).Background(cardBg).Bold(true),
+
+		FooterCard: lipgloss.NewStyle().
+			BorderTop(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			PaddingTop(1),
+		FooterTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Accent)).
+			Bold(true),
+		DownloadCard: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color(t.Secondary)).
+			BorderBackground(lipgloss.Color(t.Card)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(0, 1),
+		SelectedCard: lipgloss.NewStyle().
+			Border(lipgloss.ThickBorder()).
+			BorderForeground(lipgloss.Color(t.Accent)).
+			BorderBackground(lipgloss.Color(t.SelectedCard)).
+			Background(lipgloss.Color(t.SelectedCard)).
+			Padding(0, 0),
+		CardTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Foreground)).
+			Background(cardBg).
+			Bold(true),
+		SelectedCardTitle: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Accent)).
+			Background(selCardBg).
+			Bold(true),
+		SelectedCardMuted: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Muted)).
+			Background(selCardBg),
+		InfoLine: lipgloss.NewStyle().Foreground(lipgloss.Color(t.Success)).Background(bg),
+		ErrorLine: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Error)).
+			Background(bg).
+			Bold(true),
+		StatusDone: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Background)).
+			Background(lipgloss.Color(t.Success)).
+			Bold(true).
+			Padding(0, 1),
+		StatusActive: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Background)).
+			Background(lipgloss.Color(t.Accent)).
+			Bold(true).
+			Padding(0, 1),
+		StatusPaused: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Background)).
+			Background(lipgloss.Color(t.Warning)).
+			Bold(true).
+			Padding(0, 1),
+		StatusError: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Background)).
+			Background(lipgloss.Color(t.Error)).
+			Bold(true).
+			Padding(0, 1),
+		StatusQueued: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(t.Background)).
+			Background(lipgloss.Color(t.Secondary)).
+			Bold(true).
+			Padding(0, 1),
+		LeftPane: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			BorderBackground(lipgloss.Color(t.Card)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(1, 1),
+		RightPane: lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color(t.Muted)).
+			BorderBackground(lipgloss.Color(t.Card)).
+			Background(lipgloss.Color(t.Card)).
+			Padding(1, 1),
+	}
+}
+
+
+===== File: internal/tui/update.go =====
+package tui
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+)
+
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
+	// Route to components
+	m.jobsList, cmd = m.jobsList.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	m.details, cmd = m.details.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	// Sync the active selection to the details component on every update
+	m.details, _ = m.details.Update(JobSelectedMsg(m.jobsList.SelectedJob()))
+
+	m.stats, cmd = m.stats.Update(msg)
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		return m, tea.Batch(cmds...)
+	case tea.KeyMsg:
+		if m.screen == splashScreen {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, tea.Quit
+			}
+			return m, tea.Batch(cmds...)
+		}
+		if m.screen == addScreen {
+			return m.handleAddInput(msg)
+		}
+		if m.screen == settingsScreen {
+			return m.handleSettingsKeys(msg)
+		}
+		return m.handleListKeys(msg)
+	case splashDoneMsg:
+		if m.screen == splashScreen {
+			m.screen = listScreen
+		}
+		return m, nil
+	case manager.Event:
+		if msg.Progress != nil {
+			memo := m.progressMemo[msg.ID]
+			if msg.Progress.SpeedBps > 0 {
+				memo.SpeedBps = msg.Progress.SpeedBps
+				memo.At = time.Now()
+			}
+			if msg.Progress.ETA > 0 {
+				memo.ETA = msg.Progress.ETA
+				memo.At = time.Now()
+			}
+			m.progressMemo[msg.ID] = memo
+		}
+		// Non-progress structural events: refresh jobs list snapshot
+		if msg.Type != manager.EventProgress {
+			m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+			m.notifyInfo(fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID)))
+		}
+		if msg.Error != "" {
+			m.notifyError(msg.Error)
+		}
+		m.syncStats()
+		return m, nil
+	case actionResultMsg:
+		if msg.err != nil {
+			m.notifyError(msg.err.Error())
+			return m, nil
+		}
+		m.notifyInfo(msg.info)
+		m.errMsg = ""
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
+		return m, nil
+	case tickMsg:
+		m.now = time.Time(msg)
+		if m.errMsg != "" && !m.errUntil.IsZero() && m.now.After(m.errUntil) {
+			m.errMsg = ""
+			m.errUntil = time.Time{}
+		}
+		if m.message != "" && !m.messageUntil.IsZero() && m.now.After(m.messageUntil) {
+			m.message = ""
+			m.messageUntil = time.Time{}
+		}
+
+		for id, memo := range m.progressMemo {
+			if m.now.Sub(memo.At) > 15*time.Second {
+				delete(m.progressMemo, id)
+			}
+		}
+		return m, tickCmd(m.tickEvery)
+	default:
+		if m.screen == addScreen || (m.screen == settingsScreen && m.settingsEditing) {
+			var inputCmd tea.Cmd
+			if m.screen == addScreen {
+				m.input, inputCmd = m.input.Update(msg)
+			} else {
+				m.settingsInput, inputCmd = m.settingsInput.Update(msg)
+			}
+			if inputCmd != nil {
+				cmds = append(cmds, inputCmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+
+		// Map the search Active state to jobsList
+		m.jobsList.searchActive = m.searchActive
+		m.jobsList.searchQuery = m.searchQuery
+
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
+		}
+		return m, nil
+	}
+}
+
+func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		m.input.Blur()
+		m.screen = listScreen
+		m.step = addURLStep
+		m.add = addDraft{}
+		m.notifyInfo("add cancelled")
+		return m, nil
+	case m.step == addDestinationStep && key.Matches(msg, m.keys.Up):
+		m.moveBrowser(-1)
+		return m, nil
+	case m.step == addDestinationStep && key.Matches(msg, m.keys.Down):
+		m.moveBrowser(1)
+		return m, nil
+	case m.step == addDestinationStep && msg.String() == "right":
+		if err := m.browserEnterSelected(); err != nil {
+			m.notifyError(err.Error())
+		}
+		return m, nil
+	case m.step == addDestinationStep && msg.String() == "left":
+		m.browserParent()
+		return m, nil
+	case m.step == addDestinationStep && msg.String() == "tab":
+		m.applyBrowserSelectionToInput()
+		return m, nil
+	case msg.String() == "enter":
+		value := strings.TrimSpace(m.input.Value())
+		if value == "" {
+			m.notifyError("field cannot be empty")
+			return m, nil
+		}
+		if m.step == addURLStep {
+			m.add.url = value
+			m.beginDestinationSelection()
+			return m, nil
+		}
+
+		m.add.dst = value
+		m.recentDir = filepath.Dir(value)
+		if existing, ok := m.mgr.FindDuplicate(m.add.url, m.add.dst); ok {
+			m.notifyError(fmt.Sprintf("duplicate exists: %s", shortID(existing.ID)))
+			return m, nil
+		}
+		m.input.Blur()
+		m.screen = listScreen
+		m.step = addURLStep
+		m.input.SetValue("")
+		m.input.Placeholder = "https://example.com/file.iso"
+		return m, addDownloadCmd(m.mgr, m.add.url, m.add.dst, m.defaultAddOptions)
+	default:
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
+}
+
+func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.removeConfirm {
+		switch {
+		case key.Matches(msg, m.keys.Confirm):
+			id := m.pendingRemoveID
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			if id == "" {
+				return m, nil
+			}
+			return m, removeCmd(m.mgr, id, m.cleanupOnRemove)
+		case key.Matches(msg, m.keys.Cancel):
+			m.pendingRemoveID = ""
+			m.removeConfirm = false
+			m.notifyInfo("remove cancelled")
+			return m, nil
+		default:
+			return m, nil
+		}
+	}
+
+	if m.searchActive {
+		switch msg.String() {
+		case "esc":
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			return m, nil
+		case "enter":
+			m.searchActive = false
+			m.searchInput.Blur()
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
+			return m, cmd
+		}
+	}
+
+	switch {
+	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Log):
+		m.showLogPanel = !m.showLogPanel
+		if m.showLogPanel {
+			m.logCursor = len(m.logEntries) - 1
+			if m.logCursor < 0 {
+				m.logCursor = 0
+			}
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.LogTop):
+		m.logCursor = 0
+		return m, nil
+	case key.Matches(msg, m.keys.LogBottom):
+		m.logCursor = len(m.logEntries) - 1
+		if m.logCursor < 0 {
+			m.logCursor = 0
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		if m.showLogPanel {
+			if m.logCursor > 0 {
+				m.logCursor--
+			}
+			return m, nil
+		}
+		m.jobsList.MoveSelection(-1)
+		return m, nil
+	case key.Matches(msg, m.keys.Down):
+		if m.showLogPanel {
+			if m.logCursor < len(m.logEntries)-1 {
+				m.logCursor++
+			}
+			return m, nil
+		}
+		m.jobsList.MoveSelection(1)
+		return m, nil
+	case key.Matches(msg, m.keys.TabQueued):
+		m.jobsList.SetTab(tabQueued)
+		return m, nil
+	case key.Matches(msg, m.keys.TabActive):
+		m.jobsList.SetTab(tabActive)
+		return m, nil
+	case key.Matches(msg, m.keys.TabDone):
+		m.jobsList.SetTab(tabDone)
+		return m, nil
+	case key.Matches(msg, m.keys.NextTab):
+		m.jobsList.NextTab()
+		return m, nil
+	case key.Matches(msg, m.keys.Search):
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.searchInput.SetValue("")
+			m.searchInput.Blur()
+			m.searchActive = false
+			return m, nil
+		}
+		m.searchActive = true
+		m.searchInput.Focus()
+		return m, nil
+	case key.Matches(msg, m.keys.Help):
+		m.showHelp = !m.showHelp
+		return m, nil
+	case key.Matches(msg, m.keys.Add):
+		m.screen = addScreen
+		m.step = addURLStep
+		m.add = addDraft{}
+		m.input.SetValue("")
+		m.input.Placeholder = "https://example.com/file.iso"
+		m.input.Focus()
+		return m, nil
+	case key.Matches(msg, m.keys.Pause):
+		if item, ok := m.currentItem(); ok {
+			return m, pauseCmd(m.mgr, item.ID)
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Resume):
+		if item, ok := m.currentItem(); ok {
+			return m, resumeCmd(m.mgr, item.ID)
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.Remove):
+		if item, ok := m.currentItem(); ok {
+			m.pendingRemoveID = item.ID
+			m.removeConfirm = true
+			return m, nil
+		}
+		return m, nil
+	case key.Matches(msg, m.keys.MoveQueueUp):
+		return m.moveSelectedQueue(-1)
+	case key.Matches(msg, m.keys.MoveQueueDown):
+		return m.moveSelectedQueue(1)
+	case key.Matches(msg, m.keys.Settings):
+		m.openSettings()
+		return m, nil
+	case key.Matches(msg, m.keys.Refresh):
+		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		m.syncStats()
+		m.notifyInfo("refreshed")
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m *Model) moveSelectedQueue(delta int) (tea.Model, tea.Cmd) {
+	item, ok := m.currentItem()
+	if !ok {
+		return m, nil
+	}
+	q := m.jobsList.Queue()
+	idx := -1
+	for i, id := range q {
+		if id == item.ID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.notifyError("selected item is not queued")
+		return m, nil
+	}
+	newIdx := idx + delta
+	if newIdx < 0 || newIdx >= len(q) {
+		return m, nil
+	}
+	nq := append([]string(nil), q...)
+	nq[idx], nq[newIdx] = nq[newIdx], nq[idx]
+	return m, reorderQueueCmd(m.mgr, nq)
+}
+
+func (m *Model) notifyError(err string) {
+	m.errMsg = err
+	m.errUntil = time.Now().Add(8 * time.Second)
+	m.appendLog("error: " + err)
+}
+
+func (m *Model) notifyInfo(info string) {
+	m.message = info
+	m.messageUntil = time.Now().Add(4 * time.Second)
+	m.appendLog(info)
+}
+
+
+===== File: internal/tui/view.go =====
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/Paraspandey-debugs/Relay/internal/manager"
+)
+
+func (m *Model) View() string {
+	if m.screen == splashScreen {
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			m.renderSplash(),
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
+	}
+
+	var content string
+	if m.screen == addScreen {
+		content = m.renderAddInput()
+	} else if m.screen == settingsScreen {
+		content = m.renderSettings()
+	} else {
+
+		// Route selection to Detail component via message
+		sel := m.jobsList.SelectedJob()
+		m.details, _ = m.details.Update(JobSelectedMsg(sel))
+
+		// Top pane / Header
+		headerLines := []string{m.stats.HeaderView()}
+		if m.searchActive {
+			headerLines = append(headerLines, m.searchInput.View())
+		} else if m.jobsList.searchQuery != "" {
+			headerLines = append(headerLines, m.styles.Subtle.Render("Filter: "+m.jobsList.searchQuery+"  (press f to clear)"))
+		}
+		header := lipgloss.JoinVertical(lipgloss.Left, headerLines...)
+
+		// Bottom Stats
+		m.stats.UpdateStats(m.jobsList.GetTotal(), m.jobsList.GetQueued(), m.jobsList.GetActive(), m.jobsList.GetDone(), m.jobsList.GetAggregateSpeed())
+		footer := m.stats.View()
+
+		// Add Log Panel if requested
+		if m.showLogPanel {
+			logView := m.renderLogPanel()
+			footer = logView + "\n" + footer
+		}
+
+		appPaddingVert := 2 // m.styles.App has Padding(1, 2)
+		// account for horizontal padding (left + right). Padding(1,2) => 2 each side = 4 total
+		appPaddingHoriz := 4
+		usedHeight := lipgloss.Height(header) + lipgloss.Height(footer) + appPaddingVert
+		if m.errMsg != "" {
+			usedHeight += 2
+		} else if m.message != "" {
+			usedHeight += 2
+		}
+		availHeight := m.height - usedHeight
+		if availHeight < 5 {
+			availHeight = 5
+		}
+
+		// Compute inner width available to the two columns after App horizontal padding
+		innerWidth := m.width - appPaddingHoriz
+		if innerWidth <= 0 {
+			innerWidth = m.width
+		}
+		leftOuterWidth := innerWidth / 2
+		rightOuterWidth := innerWidth - leftOuterWidth
+
+		// LeftPane/RightPane each have border + horizontal padding = 4 columns.
+		// Components receive content width; styles add the chrome.
+		const paneChromeHoriz = 4
+		leftContentWidth := leftOuterWidth - paneChromeHoriz
+		rightContentWidth := rightOuterWidth - paneChromeHoriz
+		if leftContentWidth < 12 {
+			leftContentWidth = 12
+		}
+		if rightContentWidth < 12 {
+			rightContentWidth = 12
+		}
+
+		m.jobsList.SetSize(leftContentWidth, availHeight)
+		// send window size to detail component so it updates its internal width/height
+		m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
+
+		// Dash Layout Main
+		mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
+			m.jobsList.View(),
+			m.details.View(),
+		)
+
+		// Wrap the two panes in a card-area background so there are no uncolored gaps.
+		// Width keeps any odd leftover column painted with the card color.
+		mainBody := lipgloss.Place(
+			innerWidth,
+			availHeight,
+			lipgloss.Left,
+			lipgloss.Top,
+			mainSplit,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Card)),
+		)
+
+		mainLines := []string{header, mainBody, footer}
+		if m.errMsg != "" {
+			mainLines = append(mainLines, m.styles.ErrorLine.Render("error: "+m.errMsg))
+		} else if m.message != "" {
+			mainLines = append(mainLines, m.styles.InfoLine.Render("info: "+m.message))
+		}
+		content = lipgloss.JoinVertical(lipgloss.Left, mainLines...)
+	}
+
+	innerW := m.width - 4
+	innerH := m.height - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+	if innerH < 1 {
+		innerH = 1
+	}
+
+	placed := lipgloss.Place(
+		innerW,
+		innerH,
+		lipgloss.Left,
+		lipgloss.Top,
+		content,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color(m.theme.Foreground)),
+		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+	)
+	main := m.styles.App.Width(m.width).Height(m.height).Render(placed)
+	if m.removeConfirm {
+		return m.renderConfirmOverlay(main)
+	}
+	return main
+}
+
+// removed writeln helper — use explicit slices and lipgloss.JoinVertical in renderers
+
+func (m *Model) renderHelpBlock() string {
+	availableWidth := 72
+	if m.width > 0 {
+		availableWidth = m.width - 8
+	}
+	if availableWidth < 28 {
+		availableWidth = 28
+	}
+
+	entries := m.shortGuideEntries()
+	if m.showHelp {
+		entries = m.fullGuideEntries()
+	}
+
+	guideText := m.renderGuideEntries(entries, availableWidth-4)
+	body := m.styles.FooterTitle.Render("Guide") + "\n" + guideText
+	return m.styles.FooterCard.MaxWidth(availableWidth).Render(body)
+}
+func (m *Model) renderHeader() string {
+	return m.styles.Header.Render("Relay")
+}
+func (m *Model) shortGuideEntries() []string {
+	return []string{
+		"1/2/3 tab", "tab next", "f filter", "l log", "a add", "p pause", "r resume", "x remove", "ctrl+q quit",
+	}
+}
+
+func (m *Model) fullGuideEntries() []string {
+	return []string{
+		"1 queued", "2 active", "3 done", "tab next", "f filter", "l log",
+		"j/k move", "p pause", "r resume", "x remove", "y confirm", "n cancel",
+		"K/J queue", "R refresh", "g/G log top/bottom", "s settings", "? hide guide", "ctrl+q quit",
+	}
+}
+
+func (m *Model) renderGuideEntries(entries []string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+
+	var rawLines []string
+	line := ""
+	for _, entry := range entries {
+		part := "[" + entry + "]"
+		plainLen := len(entry) + 2
+
+		currentLen := len(line)
+		if line == "" {
+			line = part
+			continue
+		}
+		if currentLen+2+plainLen > width {
+			rawLines = append(rawLines, line)
+			line = part
+			continue
+		}
+		line += "  " + part
+	}
+	if line != "" {
+		rawLines = append(rawLines, line)
+	}
+
+	lines := make([]string, 0, len(rawLines))
+	for _, raw := range rawLines {
+		lines = append(lines, m.styles.Subtle.Render(raw))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// Dead legacy rendering helpers removed: tabs/search/stats are handled by components.
+
+func (m *Model) renderLogPanel() string {
+	var lines []string
+	lines = append(lines, m.styles.Label.Render("Event Log"))
+
+	if len(m.logEntries) == 0 {
+		lines = append(lines, m.styles.Muted.Render("no log entries yet"))
+		return lipgloss.JoinVertical(lipgloss.Left, lines...)
+	}
+
+	maxLines := 8
+	if m.height > 0 {
+		if h := m.height / 5; h > maxLines {
+			maxLines = h
+		}
+		if maxLines > 12 {
+			maxLines = 12
+		}
+	}
+	if maxLines < 4 {
+		maxLines = 4
+	}
+
+	start := m.logCursor - maxLines + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + maxLines
+	if end > len(m.logEntries) {
+		end = len(m.logEntries)
+	}
+
+	for i := start; i < end; i++ {
+		prefix := "  "
+		if i == m.logCursor {
+			prefix = "> "
+		}
+		line := prefix + m.logEntries[i]
+		if i == m.logCursor {
+			lines = append(lines, m.styles.InfoLine.Render(line))
+		} else {
+			lines = append(lines, m.styles.Muted.Render(line))
+		}
+	}
+	lines = append(lines, m.styles.Subtle.Render("l toggle  up/down scroll  g top  G bottom"))
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+func (m *Model) renderConfirmOverlay(content string) string {
+	msg := "Remove selected download?\n"
+	msg += "This can delete partial files if cleanup is enabled.\n\n"
+	msg += "y/enter confirm   n/esc cancel"
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(lipgloss.Color(m.theme.Warning)).
+		Background(lipgloss.Color(m.theme.Card)).
+		Padding(1, 2).
+		Render(msg)
+
+	if m.width > 0 && m.height > 0 {
+		overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+		return content + "\n" + overlay
+	}
+	return content + "\n\n" + box
+}
+
+func (m *Model) renderSplash() string {
+	banner := m.styles.Header.Render(strings.TrimSpace(relayStartupASCII))
+	subtitle := m.styles.Subtle.Render("download manager")
+
+	blockWidth := lipgloss.Width(banner)
+	if w := lipgloss.Width(subtitle); w > blockWidth {
+		blockWidth = w
+	}
+	if blockWidth < 1 {
+		blockWidth = 1
+	}
+
+	fill := lipgloss.NewStyle().
+		Width(blockWidth).
+		Background(lipgloss.Color(m.theme.Background))
+
+	bannerLine := fill.Render(banner)
+	spacerLine := fill.Render("")
+	subtitleLine := fill.Render(subtitle)
+
+	return lipgloss.JoinVertical(lipgloss.Left, bannerLine, spacerLine, subtitleLine)
+}
+
+func (m *Model) renderAddInput() string {
+	var lines []string
+	lines = append(lines,
+		m.styles.Header.Render("Add Download"),
+		m.styles.Subtle.Render("Enter details and press Enter to continue, Esc to cancel."),
+		"",
+	)
+
+	label := "Source URL"
+	if m.step == addDestinationStep {
+		label = "Destination Path"
+	}
+	lines = append(lines, m.styles.Label.Render(label), m.input.View())
+
+	if m.step == addDestinationStep {
+		lines = append(lines,
+			"",
+			m.styles.Muted.Render(fmt.Sprintf("URL: %s", m.add.url)),
+			m.styles.Muted.Render(fmt.Sprintf("Recent directory: %s", m.recentDir)),
+			"",
+			m.styles.Label.Render("Directory Tree"),
+			m.styles.Muted.Render(m.browserPathLabel()),
+		)
+		for i, entry := range m.visibleBrowserEntries() {
+			absoluteIndex := m.browserOffset + i
+			prefix := "  "
+			if absoluteIndex == m.browserSelected {
+				prefix = "> "
+			}
+			lines = append(lines, m.styles.Muted.Render(prefix+entry.name+"/"))
+		}
+		if len(m.browserEntries) == 0 {
+			lines = append(lines, m.styles.Muted.Render("(no subdirectories)"))
+		} else {
+			lines = append(lines, m.styles.Subtle.Render(m.browserPaginationLabel()))
+		}
+		lines = append(lines, "", m.styles.Subtle.Render(m.browserHint()))
+	}
+	if m.errMsg != "" {
+		lines = append(lines, "", m.styles.ErrorLine.Render("error: "+m.errMsg))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, lines...)
+}
+
+// Legacy per-row/detail/queue rendering removed — JobsListComponent and DetailComponent handle these.
+
+func completedDuration(item manager.DownloadRecord) time.Duration {
+	if item.ActiveFor > 0 {
+		return item.ActiveFor
+	}
+	if !item.CompletedAt.IsZero() && !item.CreatedAt.IsZero() {
+		d := item.CompletedAt.Sub(item.CreatedAt)
+		if d > 0 {
+			return d
+		}
+	}
+	if !item.UpdatedAt.IsZero() && !item.CreatedAt.IsZero() {
+		d := item.UpdatedAt.Sub(item.CreatedAt)
+		if d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
+// statusPill removed from view.go; components use their own rendering helpers.
+
+func progressRatio(p manager.ProgressInfo) float64 {
+	if p.Total <= 0 {
+		return 0
+	}
+	r := float64(p.Downloaded) / float64(p.Total)
+	if r < 0 {
+		return 0
+	}
+	if r > 1 {
+		return 1
+	}
+	return r
+}
+
+func totalLabel(total int64) string {
+	if total <= 0 {
+		return "unknown"
+	}
+	return humanBytes(total)
+}
+
+

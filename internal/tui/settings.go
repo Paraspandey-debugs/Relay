@@ -226,11 +226,12 @@ func (m *Model) openSettings() {
 
 // renderSettings draws the settings screen.
 func (m *Model) renderSettings() string {
-	var b strings.Builder
-	b.WriteString(m.styles.Header.Render("Settings"))
-	b.WriteString("\n")
-	b.WriteString(m.styles.Subtle.Render("↑/↓ navigate · Enter/e edit field · Esc back to list"))
-	b.WriteString("\n\n")
+	var lines []string
+	lines = append(lines,
+		m.styles.Header.Render("Settings"),
+		m.styles.Subtle.Render("↑/↓ navigate · Enter/e edit field · Esc back to list"),
+		"",
+	)
 
 	const labelW = 16
 	for i, f := range m.settingsFields {
@@ -242,7 +243,7 @@ func (m *Model) renderSettings() string {
 		label := fmt.Sprintf("%-*s", labelW, f.label)
 
 		if selected && m.settingsEditing {
-			b.WriteString(prefix + m.styles.Label.Render(label) + "  " + m.settingsInput.View())
+			lines = append(lines, prefix+m.styles.Label.Render(label)+"  "+m.settingsInput.View())
 		} else {
 			var styledVal string
 			if selected {
@@ -250,23 +251,20 @@ func (m *Model) renderSettings() string {
 			} else {
 				styledVal = m.styles.Muted.Render(f.value)
 			}
-			b.WriteString(prefix + m.styles.Label.Render(label) + "  " + styledVal)
+			lines = append(lines, prefix+m.styles.Label.Render(label)+"  "+styledVal)
 		}
-		b.WriteString("\n")
 
 		if selected {
-			b.WriteString(m.styles.Subtle.Render("    " + f.hint))
-			b.WriteString("\n")
+			lines = append(lines, m.styles.Subtle.Render("    "+f.hint))
 		}
 	}
 
 	if m.errMsg != "" {
-		b.WriteString("\n")
-		b.WriteString(m.styles.ErrorLine.Render("error: " + m.errMsg))
-		b.WriteString("\n")
+		lines = append(lines, "", m.fullWidthLine(m.styles.ErrorLine, "error: "+m.errMsg), "")
 	}
 
-	return m.styles.App.Render(b.String())
+	content := strings.Join(lines, "\n")
+	return m.withAppBackground(content)
 }
 
 // handleSettingsKeys processes key events on the settings screen.
