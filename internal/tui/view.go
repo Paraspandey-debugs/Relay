@@ -18,13 +18,17 @@ func safeWidth(width int) int {
 	return width
 }
 
+func (m *Model) contentWidth() int {
+	return safeWidth(m.width - 4)
+}
+
 func (m *Model) fullWidthLine(style lipgloss.Style, text string) string {
-	return style.Copy().Width(safeWidth(m.width)).Render(text)
+	return style.Copy().Width(m.contentWidth()).Render(text)
 }
 
 func (m *Model) withAppBackground(content string) string {
 	return lipgloss.NewStyle().
-		Width(safeWidth(m.width)).
+		Width(m.contentWidth()).
 		Background(lipgloss.Color(m.theme.Background)).
 		Render(content)
 }
@@ -286,7 +290,7 @@ func (m *Model) renderLogPanel() string {
 	return m.withAppBackground(content)
 }
 
-func (m *Model) renderConfirmOverlay(content string) string {
+func (m *Model) renderConfirmOverlay(_ string) string {
 	msg := "Remove selected download?\n"
 	msg += "This can delete partial files if cleanup is enabled.\n\n"
 	msg += "y/enter confirm   n/esc cancel"
@@ -299,10 +303,17 @@ func (m *Model) renderConfirmOverlay(content string) string {
 		Render(msg)
 
 	if m.width > 0 && m.height > 0 {
-		overlay := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
-		return content + "\n" + overlay
+		return lipgloss.Place(
+			m.width,
+			m.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			box,
+			lipgloss.WithWhitespaceChars(" "),
+			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
+		)
 	}
-	return content + "\n\n" + box
+	return box
 }
 
 func (m *Model) renderSplash() string {

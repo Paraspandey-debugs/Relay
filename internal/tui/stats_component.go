@@ -34,7 +34,10 @@ func (m StatsComponent) Init() tea.Cmd {
 func (m StatsComponent) Update(msg tea.Msg) (StatsComponent, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width = msg.Width - 4
+		if m.width < 1 {
+			m.width = 1
+		}
 		m.height = msg.Height
 	}
 	return m, nil

@@ -137,12 +137,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keys.Quit):
+		return m, tea.Quit
+	case key.Matches(msg, m.keys.Cancel):
 		m.input.Blur()
 		m.screen = listScreen
 		m.step = addURLStep
 		m.add = addDraft{}
-		m.notifyInfo("add cancelled")
-		return m, nil
+		m.input.SetValue("")
+		m.input.Placeholder = "https://example.com/file.iso"
+		m.message = ""
+		m.messageUntil = time.Time{}
+		m.appendLog("add cancelled")
+		return m, tea.ClearScreen
 	case m.step == addDestinationStep && key.Matches(msg, m.keys.Up):
 		m.moveBrowser(-1)
 		return m, nil
@@ -243,7 +249,7 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.logCursor = 0
 			}
 		}
-		return m, nil
+		return m, tea.ClearScreen
 	case key.Matches(msg, m.keys.LogTop):
 		m.logCursor = 0
 		return m, nil
