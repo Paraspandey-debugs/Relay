@@ -2,19 +2,14 @@ package manager
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
-	"path/filepath"
 	"time"
 )
 
-func (m *Manager) loadState() error {
+func (m *Manager) migrateFromJSONIfNecessary() error {
 	b, err := os.ReadFile(m.statePath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
+		return nil
 	}
 
 	var st persistedState
@@ -22,14 +17,43 @@ func (m *Manager) loadState() error {
 		return err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	records, _, err := m.store.Load()
+	if err == nil && len(records) > 0 {
+		_ = os.Rename(m.statePath, m.statePath+".bak")
+		return nil
+	}
 
-	m.jobs = make(map[string]*managedDownload, len(st.Downloads))
+	jobs := make(map[string]*managedDownload, len(st.Downloads))
 	for _, rec := range st.Downloads {
 		if rec.ID == "" {
 			continue
 		}
+		jobs[rec.ID] = &managedDownload{rec: rec}
+	}
+
+	if err := m.store.SaveAll(jobs, st.Queue); err != nil {
+		return err
+	}
+
+	_ = os.Rename(m.statePath, m.statePath+".bak")
+	return nil
+}
+
+func (m *Manager) loadState() error {
+	if err := m.migrateFromJSONIfNecessary(); err != nil {
+		return err
+	}
+
+	records, queue, err := m.store.Load()
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.jobs = make(map[string]*managedDownload, len(records))
+	for _, rec := range records {
 		if rec.Status == StatusCompleted {
 			if rec.ActiveFor <= 0 && !rec.CompletedAt.IsZero() && !rec.CreatedAt.IsZero() {
 				rec.ActiveFor = rec.CompletedAt.Sub(rec.CreatedAt)
@@ -49,12 +73,11 @@ func (m *Manager) loadState() error {
 			rec.Error = ""
 			rec.UpdatedAt = time.Now()
 		}
-		copied := rec
-		m.jobs[rec.ID] = &managedDownload{rec: copied}
+		m.jobs[rec.ID] = &managedDownload{rec: rec}
 	}
 
-	m.queue = make([]string, 0, len(st.Queue))
-	for _, id := range st.Queue {
+	m.queue = make([]string, 0, len(queue))
+	for _, id := range queue {
 		job, ok := m.jobs[id]
 		if !ok {
 			continue
@@ -68,36 +91,11 @@ func (m *Manager) loadState() error {
 }
 
 func (m *Manager) saveStateLocked() error {
-	st := persistedState{
-		Version: 1,
-		Queue:   append([]string(nil), m.queue...),
-		SavedAt: time.Now(),
+	err := m.store.SaveAll(m.jobs, m.queue)
+	if err == nil {
+		m.lastPersistAt = time.Now()
 	}
-
-	st.Downloads = make([]DownloadRecord, 0, len(m.jobs))
-	for _, job := range m.jobs {
-		st.Downloads = append(st.Downloads, job.rec)
-	}
-
-	b, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	dir := filepath.Dir(m.statePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	tmp := m.statePath + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, m.statePath); err != nil {
-		return err
-	}
-	m.lastPersistAt = time.Now()
-	return nil
+	return err
 }
 
 func (m *Manager) saveStateIfDueLocked(force bool) error {

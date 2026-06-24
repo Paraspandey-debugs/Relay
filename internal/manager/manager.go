@@ -17,6 +17,8 @@ type Manager struct {
 	active        map[string]struct{}
 	maxConcurrent int
 	statePath     string
+	dbPath        string
+	store         StateStore
 	persistEvery  time.Duration
 	lastPersistAt time.Time
 	events        chan Event
@@ -42,16 +44,28 @@ func New(cfg Config) (*Manager, error) {
 		cfg.EventBuffer = 256
 	}
 
+	dbPath := strings.TrimSuffix(cfg.StatePath, ".json")
+	if !strings.HasSuffix(dbPath, ".db") {
+		dbPath += ".db"
+	}
+
 	m := &Manager{
 		jobs:          make(map[string]*managedDownload),
 		queue:         make([]string, 0),
 		active:        make(map[string]struct{}),
 		maxConcurrent: cfg.MaxConcurrent,
 		statePath:     cfg.StatePath,
+		dbPath:        dbPath,
 		persistEvery:  time.Second,
 		events:        make(chan Event, cfg.EventBuffer),
 		autoStart:     cfg.AutoStart,
 	}
+
+	store, err := NewDBStore(m.dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize db: %w", err)
+	}
+	m.store = store
 
 	if err := m.loadState(); err != nil {
 		return nil, err
@@ -325,5 +339,8 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 
 	close(m.events)
+	if m.store != nil {
+		m.store.Close()
+	}
 	return err
 }
