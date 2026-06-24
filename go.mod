@@ -1,6 +1,6 @@
 module github.com/Paraspandey-debugs/Relay
 
-go 1.22.2
+go 1.24
 
 require (
 	github.com/charmbracelet/bubbles v0.20.0
@@ -15,6 +15,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.2.3 // indirect
 	github.com/charmbracelet/x/term v0.2.0 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/gammazero/deque v1.2.1 // indirect
+	github.com/gammazero/workerpool v1.2.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

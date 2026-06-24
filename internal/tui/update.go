@@ -27,9 +27,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	// Sync the active selection to the details component on every update
-	m.details, _ = m.details.Update(JobSelectedMsg(m.jobsList.SelectedJob()))
-
 	m.stats, cmd = m.stats.Update(msg)
 	if cmd != nil {
 		cmds = append(cmds, cmd)
@@ -74,7 +71,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Non-progress structural events: refresh jobs list snapshot
 		if msg.Type != manager.EventProgress {
-			m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+			var lcmd tea.Cmd
+			m.jobsList, lcmd = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+			if lcmd != nil {
+				cmds = append(cmds, lcmd)
+			}
 			m.notifyInfo(fmt.Sprintf("event: %s (%s)", msg.Type, shortID(msg.ID)))
 		}
 		if msg.Error != "" {
@@ -89,8 +90,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notifyInfo(msg.info)
 		m.errMsg = ""
-		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		var updCmd tea.Cmd
+		m.jobsList, updCmd = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
 		m.syncStats()
+		if updCmd != nil {
+			return m, updCmd
+		}
 		return m, nil
 	case tickMsg:
 		m.now = time.Time(msg)
@@ -122,10 +127,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
-
-		// Map the search Active state to jobsList
-		m.jobsList.searchActive = m.searchActive
-		m.jobsList.searchQuery = m.searchQuery
 
 		if len(cmds) > 0 {
 			return m, tea.Batch(cmds...)
@@ -225,16 +226,19 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.Blur()
 			m.searchQuery = ""
 			m.searchInput.SetValue("")
-			return m, nil
+			cmd := m.jobsList.SetSearch(false, "")
+			return m, cmd
 		case "enter":
 			m.searchActive = false
 			m.searchInput.Blur()
-			return m, nil
-		default:
-			var cmd tea.Cmd
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
+			cmd := m.jobsList.SetSearch(false, m.searchQuery)
 			return m, cmd
+		default:
+			var cmd1, cmd2 tea.Cmd
+			m.searchInput, cmd1 = m.searchInput.Update(msg)
+			m.searchQuery = strings.TrimSpace(m.searchInput.Value())
+			cmd2 = m.jobsList.SetSearch(true, m.searchQuery)
+			return m, tea.Batch(cmd1, cmd2)
 		}
 	}
 
@@ -266,8 +270,8 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		m.jobsList.MoveSelection(-1)
-		return m, nil
+		cmd := m.jobsList.MoveSelection(-1)
+		return m, cmd
 	case key.Matches(msg, m.keys.Down):
 		if m.showLogPanel {
 			if m.logCursor < len(m.logEntries)-1 {
@@ -275,31 +279,33 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		m.jobsList.MoveSelection(1)
-		return m, nil
+		cmd := m.jobsList.MoveSelection(1)
+		return m, cmd
 	case key.Matches(msg, m.keys.TabQueued):
-		m.jobsList.SetTab(tabQueued)
-		return m, nil
+		cmd := m.jobsList.SetTab(tabQueued)
+		return m, cmd
 	case key.Matches(msg, m.keys.TabActive):
-		m.jobsList.SetTab(tabActive)
-		return m, nil
+		cmd := m.jobsList.SetTab(tabActive)
+		return m, cmd
 	case key.Matches(msg, m.keys.TabDone):
-		m.jobsList.SetTab(tabDone)
-		return m, nil
+		cmd := m.jobsList.SetTab(tabDone)
+		return m, cmd
 	case key.Matches(msg, m.keys.NextTab):
-		m.jobsList.NextTab()
-		return m, nil
+		cmd := m.jobsList.NextTab()
+		return m, cmd
 	case key.Matches(msg, m.keys.Search):
 		if m.searchQuery != "" {
 			m.searchQuery = ""
 			m.searchInput.SetValue("")
 			m.searchInput.Blur()
 			m.searchActive = false
-			return m, nil
+			cmd := m.jobsList.SetSearch(false, "")
+			return m, cmd
 		}
 		m.searchActive = true
 		m.searchInput.Focus()
-		return m, nil
+		cmd := m.jobsList.SetSearch(true, m.searchQuery)
+		return m, cmd
 	case key.Matches(msg, m.keys.Help):
 		m.showHelp = !m.showHelp
 		return m, nil
@@ -336,10 +342,11 @@ func (m *Model) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.openSettings()
 		return m, nil
 	case key.Matches(msg, m.keys.Refresh):
-		m.jobsList, _ = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
+		var updCmd tea.Cmd
+		m.jobsList, updCmd = m.jobsList.Update(updateFullStateMsg{items: m.mgr.List(), queue: m.mgr.Queue()})
 		m.syncStats()
 		m.notifyInfo("refreshed")
-		return m, nil
+		return m, updCmd
 	default:
 		return m, nil
 	}

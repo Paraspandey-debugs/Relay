@@ -2,3 +2,6 @@ test_files/
 relay-downloads.state.json
 relay-downloads.state.json
 scripts/
+/home/hyperghost/github/Relay/tui_combined.txt
+
+.venv

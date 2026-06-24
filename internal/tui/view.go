@@ -54,10 +54,6 @@ func (m *Model) View() string {
 		content = m.renderSettings()
 	} else {
 
-		// Route selection to Detail component via message
-		sel := m.jobsList.SelectedJob()
-		m.details, _ = m.details.Update(JobSelectedMsg(sel))
-
 		// Top pane / Header
 		headerLines := []string{m.stats.HeaderView()}
 		if m.searchActive {
@@ -170,75 +166,7 @@ func (m *Model) View() string {
 
 // removed writeln helper — use explicit slices and lipgloss.JoinVertical in renderers
 
-func (m *Model) renderHelpBlock() string {
-	availableWidth := 72
-	if m.width > 0 {
-		availableWidth = m.width - 8
-	}
-	if availableWidth < 28 {
-		availableWidth = 28
-	}
 
-	entries := m.shortGuideEntries()
-	if m.showHelp {
-		entries = m.fullGuideEntries()
-	}
-
-	guideText := m.renderGuideEntries(entries, availableWidth-4)
-	body := m.styles.FooterTitle.Render("Guide") + "\n" + guideText
-	return m.styles.FooterCard.MaxWidth(availableWidth).Render(body)
-}
-func (m *Model) renderHeader() string {
-	return m.styles.Header.Render("Relay")
-}
-func (m *Model) shortGuideEntries() []string {
-	return []string{
-		"1/2/3 tab", "tab next", "f filter", "l log", "a add", "p pause", "r resume", "x remove", "ctrl+q quit",
-	}
-}
-
-func (m *Model) fullGuideEntries() []string {
-	return []string{
-		"1 queued", "2 active", "3 done", "tab next", "f filter", "l log",
-		"j/k move", "p pause", "r resume", "x remove", "y confirm", "n cancel",
-		"K/J queue", "R refresh", "g/G log top/bottom", "s settings", "? hide guide", "ctrl+q quit",
-	}
-}
-
-func (m *Model) renderGuideEntries(entries []string, width int) string {
-	if width < 20 {
-		width = 20
-	}
-
-	var rawLines []string
-	line := ""
-	for _, entry := range entries {
-		part := "[" + entry + "]"
-		plainLen := len(entry) + 2
-
-		currentLen := len(line)
-		if line == "" {
-			line = part
-			continue
-		}
-		if currentLen+2+plainLen > width {
-			rawLines = append(rawLines, line)
-			line = part
-			continue
-		}
-		line += "  " + part
-	}
-	if line != "" {
-		rawLines = append(rawLines, line)
-	}
-
-	lines := make([]string, 0, len(rawLines))
-	for _, raw := range rawLines {
-		lines = append(lines, m.styles.Subtle.Render(raw))
-	}
-
-	return strings.Join(lines, "\n")
-}
 
 // Dead legacy rendering helpers removed: tabs/search/stats are handled by components.
 
