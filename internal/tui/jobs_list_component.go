@@ -43,6 +43,7 @@ func (m JobsListComponent) Init() tea.Cmd {
 }
 
 func (m JobsListComponent) Update(msg tea.Msg) (JobsListComponent, tea.Cmd) {
+	oldID := m.SelectedID()
 	switch msg := msg.(type) {
 	case manager.Event:
 		// Diff-based state update!
@@ -81,26 +82,61 @@ func (m JobsListComponent) Update(msg tea.Msg) (JobsListComponent, tea.Cmd) {
 		m.queue = msg.queue
 		m.ensureSelection()
 	}
+
+	if oldID != m.SelectedID() {
+		job := m.SelectedJob()
+		return m, func() tea.Msg { return JobSelectedMsg(job) }
+	}
 	return m, nil
 }
 
-func (m *JobsListComponent) MoveSelection(delta int) {
+func (m *JobsListComponent) MoveSelection(delta int) tea.Cmd {
+	oldID := m.SelectedID()
 	if delta < 0 && m.selected > 0 {
 		m.selected--
 	} else if delta > 0 && m.selected < len(m.visibleItems())-1 {
 		m.selected++
 	}
 	m.ensureSelection()
+	if oldID != m.SelectedID() {
+		job := m.SelectedJob()
+		return func() tea.Msg { return JobSelectedMsg(job) }
+	}
+	return nil
 }
 
-func (m *JobsListComponent) SetTab(t listTab) {
+func (m *JobsListComponent) SetTab(t listTab) tea.Cmd {
+	oldID := m.SelectedID()
 	m.activeTab = t
 	m.ensureSelection()
+	if oldID != m.SelectedID() {
+		job := m.SelectedJob()
+		return func() tea.Msg { return JobSelectedMsg(job) }
+	}
+	return nil
 }
 
-func (m *JobsListComponent) NextTab() {
+func (m *JobsListComponent) NextTab() tea.Cmd {
+	oldID := m.SelectedID()
 	m.activeTab = (m.activeTab + 1) % 3
 	m.ensureSelection()
+	if oldID != m.SelectedID() {
+		job := m.SelectedJob()
+		return func() tea.Msg { return JobSelectedMsg(job) }
+	}
+	return nil
+}
+
+func (m *JobsListComponent) SetSearch(active bool, query string) tea.Cmd {
+	oldID := m.SelectedID()
+	m.searchActive = active
+	m.searchQuery = query
+	m.ensureSelection()
+	if oldID != m.SelectedID() {
+		job := m.SelectedJob()
+		return func() tea.Msg { return JobSelectedMsg(job) }
+	}
+	return nil
 }
 
 func (m *JobsListComponent) ensureSelection() {

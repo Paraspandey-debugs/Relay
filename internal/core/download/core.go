@@ -14,7 +14,22 @@ import (
 
 	"github.com/Paraspandey-debugs/Relay/internal/core/checksum"
 	corehttp "github.com/Paraspandey-debugs/Relay/internal/core/httpclient"
+	"github.com/gammazero/workerpool"
 )
+
+var (
+	GlobalWorkerPool *workerpool.WorkerPool
+	poolOnce         sync.Once
+)
+
+func getGlobalPool() *workerpool.WorkerPool {
+	poolOnce.Do(func() {
+		if GlobalWorkerPool == nil {
+			GlobalWorkerPool = workerpool.New(32) // Default global pool size
+		}
+	})
+	return GlobalWorkerPool
+}
 
 func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, progress chan<- ProgressMsg) error {
 	cfg := DefaultOptions()
@@ -73,16 +88,28 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 	progressDone := make(chan struct{})
 	go emitProgress(ctx, &totalWritten, st.Total, int32(cfg.Workers), &retries, cfg.ProgressInterval, progress, progressDone)
 
-	segCh := make(chan int, len(st.Segments))
-	for i := range st.Segments {
-		if !st.Segments[i].Done {
-			segCh <- i
-		}
-	}
-	close(segCh)
-
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+
+	stateFlushStop := make(chan struct{})
+	stateFlushDone := make(chan struct{})
+	go func() {
+		defer close(stateFlushDone)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stateFlushStop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				mu.Lock()
+				_ = writeState(statePath, st)
+				mu.Unlock()
+			}
+		}
+	}()
 	errCh := make(chan error, 1)
 	sendErr := func(e error) {
 		select {
@@ -91,9 +118,15 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 		}
 	}
 
-	worker := func() {
-		defer wg.Done()
-		for idx := range segCh {
+	pool := getGlobalPool()
+	for i := range st.Segments {
+		if st.Segments[i].Done {
+			continue
+		}
+		idx := i
+		wg.Add(1)
+		pool.Submit(func() {
+			defer wg.Done()
 			select {
 			case <-ctx.Done():
 				return
@@ -101,21 +134,24 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 			}
 			seg := &st.Segments[idx]
 			if seg.Done || seg.Next > seg.End {
-				continue
+				return
 			}
 			if err := fetchSegment(ctx, client, f, st, seg, cfg, &totalWritten, &retries, &mu, statePath); err != nil {
 				sendErr(err)
 				cancel()
-				return
 			}
-		}
-	}
-
-	for i := 0; i < cfg.Workers; i++ {
-		wg.Add(1)
-		go worker()
+		})
 	}
 	wg.Wait()
+
+	close(stateFlushStop)
+	<-stateFlushDone
+
+	// Final guaranteed flush
+	mu.Lock()
+	_ = writeState(statePath, st)
+	mu.Unlock()
+
 	close(progressDone)
 
 	select {
@@ -204,11 +240,7 @@ func fetchSegment(
 		if seg.Next > seg.End {
 			mu.Lock()
 			seg.Done = true
-			errState := writeState(statePath, st)
 			mu.Unlock()
-			if errState != nil {
-				return fmt.Errorf("persist state: %w", errState)
-			}
 			return nil
 		}
 
@@ -237,11 +269,7 @@ func fetchSegment(
 			resp.Body.Close()
 			mu.Lock()
 			seg.Done = true
-			errState := writeState(statePath, st)
 			mu.Unlock()
-			if errState != nil {
-				return fmt.Errorf("persist state after 416: %w", errState)
-			}
 			return nil
 		}
 
@@ -267,11 +295,7 @@ func fetchSegment(
 		if seg.Next > seg.End {
 			seg.Done = true
 		}
-		errState := writeState(statePath, st)
 		mu.Unlock()
-		if errState != nil {
-			return fmt.Errorf("persist state: %w", errState)
-		}
 
 		if cpErr != nil {
 			retries.Add(1)
