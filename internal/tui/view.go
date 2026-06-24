@@ -111,10 +111,17 @@ func (m *Model) View() string {
 		// send window size to detail component so it updates its internal width/height
 		m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
 
+		var rightPane string
+		if m.removeConfirm {
+			rightPane = m.renderConfirmOverlay(rightContentWidth, availHeight)
+		} else {
+			rightPane = m.details.View()
+		}
+
 		// Dash Layout Main
 		mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
 			m.jobsList.View(),
-			m.details.View(),
+			rightPane,
 		)
 
 		// Wrap the two panes in a card-area background so there are no uncolored gaps.
@@ -158,9 +165,6 @@ func (m *Model) View() string {
 		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
 	)
 	main := m.styles.App.Width(m.width).Height(m.height).Render(placed)
-	if m.removeConfirm {
-		return m.renderConfirmOverlay(main)
-	}
 	return main
 }
 
@@ -218,7 +222,7 @@ func (m *Model) renderLogPanel() string {
 	return m.withAppBackground(content)
 }
 
-func (m *Model) renderConfirmOverlay(_ string) string {
+func (m *Model) renderConfirmOverlay(width, height int) string {
 	msg := "Remove selected download?\n"
 	msg += "This can delete partial files if cleanup is enabled.\n\n"
 	msg += "y/enter confirm   n/esc cancel"
@@ -230,18 +234,13 @@ func (m *Model) renderConfirmOverlay(_ string) string {
 		Padding(1, 2).
 		Render(msg)
 
-	if m.width > 0 && m.height > 0 {
-		return lipgloss.Place(
-			m.width,
-			m.height,
-			lipgloss.Center,
-			lipgloss.Center,
-			box,
-			lipgloss.WithWhitespaceChars(" "),
-			lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
-		)
-	}
-	return box
+	return lipgloss.Place(
+		width,
+		height,
+		lipgloss.Center,
+		lipgloss.Center,
+		box,
+	)
 }
 
 func (m *Model) renderSplash() string {

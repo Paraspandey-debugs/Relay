@@ -14,22 +14,9 @@ import (
 
 	"github.com/Paraspandey-debugs/Relay/internal/core/checksum"
 	corehttp "github.com/Paraspandey-debugs/Relay/internal/core/httpclient"
-	"github.com/gammazero/workerpool"
 )
 
-var (
-	GlobalWorkerPool *workerpool.WorkerPool
-	poolOnce         sync.Once
-)
 
-func getGlobalPool() *workerpool.WorkerPool {
-	poolOnce.Do(func() {
-		if GlobalWorkerPool == nil {
-			GlobalWorkerPool = workerpool.New(32) // Default global pool size
-		}
-	})
-	return GlobalWorkerPool
-}
 
 func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, progress chan<- ProgressMsg) error {
 	cfg := DefaultOptions()
@@ -118,15 +105,17 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 		}
 	}
 
-	pool := getGlobalPool()
+	sem := make(chan struct{}, cfg.Workers)
 	for i := range st.Segments {
 		if st.Segments[i].Done {
 			continue
 		}
 		idx := i
 		wg.Add(1)
-		pool.Submit(func() {
+		sem <- struct{}{} // Block until a worker slot is available
+		go func() {
 			defer wg.Done()
+			defer func() { <-sem }()
 			select {
 			case <-ctx.Done():
 				return
@@ -140,7 +129,7 @@ func DownloadFileV2(ctx context.Context, url, dstPath string, opt *Options, prog
 				sendErr(err)
 				cancel()
 			}
-		})
+		}()
 	}
 	wg.Wait()
 

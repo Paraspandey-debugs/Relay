@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Paraspandey-debugs/Relay/internal/api"
 	"github.com/Paraspandey-debugs/Relay/internal/core/download"
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 	"github.com/Paraspandey-debugs/Relay/internal/tui"
@@ -32,6 +33,7 @@ func main() {
 	colorHeader := flag.String("color-header", "", "override header color (hex or ANSI color)")
 	colorCard := flag.String("color-card", "", "override card background color (hex or ANSI color)")
 	colorSelectedCard := flag.String("color-selected-card", "", "override selected card color (hex or ANSI color)")
+	apiPort := flag.Int("api-port", 8080, "port to run the web API server on (0 to disable)")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -65,6 +67,15 @@ func main() {
 		"header":        *colorHeader,
 		"card":          *colorCard,
 		"selected-card": *colorSelectedCard,
+	}
+
+	if *apiPort > 0 {
+		apiServer := api.NewServer(mgr)
+		go func() {
+			if err := apiServer.Start(fmt.Sprintf(":%d", *apiPort)); err != nil {
+				fmt.Fprintf(os.Stderr, "api server exited with error: %v\n", err)
+			}
+		}()
 	}
 
 	if err := tui.Run(
