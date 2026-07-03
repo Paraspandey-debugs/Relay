@@ -101,10 +101,35 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 	<-progressDone
 
 	// Auto-fallback to single-worker on HTTP 429 rate limit.
+	didFallback := false
 	if err != nil && strings.Contains(err.Error(), "rate limited") && opts.Workers > 1 {
 		log.Printf("[relay] auto-fallback to single-worker for %s (was %d workers)", url, opts.Workers)
 		opts.Workers = 1
 		opts.ForceSingle = true
+		didFallback = true
+		// Update display to show single-worker fallback is active
+		m.mu.Lock()
+		if current, exists := m.jobs[id]; exists {
+			current.rec.Progress = ProgressInfo{
+				Downloaded: current.rec.Progress.Downloaded,
+				Total:      current.rec.Progress.Total,
+				SpeedBps:   current.rec.Progress.SpeedBps,
+				ETA:        current.rec.Progress.ETA,
+				Workers:    1,
+				Retries:    current.rec.Progress.Retries,
+			}
+			current.rec.UpdatedAt = time.Now()
+			progressSnapshot := current.rec.Progress
+			m.publishLocked(Event{
+				Type:     EventProgress,
+				ID:       id,
+				Status:   current.rec.Status,
+				Progress: &progressSnapshot,
+				At:       time.Now(),
+			})
+			_ = m.saveStateIfDueLocked(false)
+		}
+		m.mu.Unlock()
 		progressCh = make(chan download.ProgressMsg, 32)
 		progressDone = make(chan struct{})
 		go func() {
@@ -170,6 +195,12 @@ func (m *Manager) runDownload(ctx context.Context, id string) {
 		job.rec.CompletedAt = now
 		job.rec.UpdatedAt = now
 		m.publishLocked(Event{Type: EventCompleted, ID: id, Status: StatusCompleted, At: now})
+	case err != nil && didFallback:
+		// Fallback already failed; keep the single-worker error message
+		job.rec.Error = "[429 fallback] " + err.Error()
+		job.rec.Status = StatusErrored
+		job.rec.UpdatedAt = now
+		m.publishLocked(Event{Type: EventErrored, ID: id, Status: StatusErrored, Error: job.rec.Error, At: now})
 	case errors.Is(err, context.Canceled):
 		if job.rec.Status != StatusPaused {
 			job.rec.Status = StatusPaused

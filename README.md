@@ -39,7 +39,7 @@ ____  _____ _         _ __   __
 ## Features
 
 - **Parallel chunked downloads** — splits files into chunks and downloads them simultaneously across multiple workers
-- **Auto-resume** — interrupted downloads pick up exactly where they left off using `.part` state files
+- **Resilient resume** — paused/interrupted downloads use `.part` byte-range files; restarting the daemon resumes them automatically from the last byte
 - **Queue management** — add as many URLs as you want; Relay schedules them based on your concurrency limit
 - **Pause & Resume** — stop any active download and bring it back on demand
 - **SHA-256 verification** — optionally validate every download against an expected checksum
@@ -100,7 +100,7 @@ relayd --color-accent "#FF00FF" --color-background "#0D0D0D"
 | `--concurrency` | `3` | Max number of simultaneous downloads |
 | `--theme` | `ocean` | TUI color theme (`ocean` \| `sunset` \| `mono`) |
 | `--refresh-ms` | `250` | UI refresh interval in milliseconds |
-| `--workers` | `0` | Default parallel chunk workers per download (`0` = auto) |
+| `--workers` | `0` | Default parallel chunk workers per download (`0` = built-in default, capped at 8 per host) |
 | `--cleanup` | `true` | Remove partial files when a download is deleted |
 | `--color-background` | | Override background color (hex or ANSI) |
 | `--color-foreground` | | Override foreground color |
@@ -211,6 +211,34 @@ internal/
   manager/       → queue, concurrency scheduling, state persistence
   tui/           → Bubble Tea model, views, themes, keybindings
 ```
+
+### Implementation details
+
+**Download engine**
+- `DownloadFileV2` probes the URL with a HEAD request to confirm byte-range support, then splits the file into chunk-sized segments.
+- A `TaskQueue` holds pending byte ranges; worker goroutines pop segments and write to a shared `.part` file using `os.File` with offset writes.
+- A `Balancer` tracks active workers and can steal remaining work if a worker falls behind or gets rate-limited.
+
+**Concurrency & scheduling**
+- The `Manager` owns a bounded queue and an `active` set. `scheduleLocked()` starts new downloads until either the queue is empty or `maxConcurrent` is reached.
+- Each download configures per-file workers; the executor merges user options with defaults and enforces an 8-worker host cap.
+
+**Resume mechanics**
+- Progress is recorded as completed byte ranges inside a sidecar `.part.state.json` file. On restart, `loadState()` rebuilds the queue and the executor resumes from the last written offset.
+- Pausing cancels the download context; the partial file remains on disk. Resuming re-queues the job and continues from the saved offset.
+
+**Rate-limit resilience**
+- Workers detect HTTP 429 and back off with exponential jitter up to `maxRetries`.
+- If all retries are exhausted, the executor auto-fallback path runs: it retries once with `ForceSingle=true, Workers=1`, logging `[429 fallback] ...` on failure.
+
+**Web / daemon mode**
+- `cmd/dm/main.go` builds a single `relayd` binary. In headless mode it starts an HTTP API server that serves the embedded React frontend and JSON endpoints.
+- The embedded frontend is built from `web/` and packaged via `embed.FS`.
+- Runtime settings are exposed through `GET/PUT /api/config`; changes are applied immediately and persisted to `~/.config/relay/daemon.json`.
+
+**TUI mode**
+- The terminal UI is built with Bubble Tea. The model subscribes to manager events and re-renders on progress updates.
+- Data flows: goroutine workers → `ProgressMsg` channel → executor → `Event` subscribers → TUI view update.
 
 ---
 
