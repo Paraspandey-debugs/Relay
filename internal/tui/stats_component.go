@@ -69,8 +69,8 @@ func (m StatsComponent) View() string {
 }
 
 func (m StatsComponent) HeaderView() string {
-	left := m.styles.Header.Render("Relay Dashboard")
-	subtle := m.styles.Subtle.Render("Production Mode")
+	left := m.styles.Header.Render("Relay")
+	subtle := m.styles.Subtle.Render("Terminal Dashboard")
 	if m.width > 0 {
 		row := lipgloss.JoinHorizontal(lipgloss.Top, left, subtle)
 		return lipgloss.PlaceHorizontal(

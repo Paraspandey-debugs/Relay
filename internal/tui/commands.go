@@ -5,17 +5,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/Paraspandey-debugs/Relay/internal/core/download"
 	"github.com/Paraspandey-debugs/Relay/internal/manager"
 )
 
-func addDownloadCmd(mgr *manager.Manager, url, dst string, opts download.Options) tea.Cmd {
+func addDownloadCmd(mgr manager.Interface, req manager.AddRequest) tea.Cmd {
 	return func() tea.Msg {
-		id, err := mgr.Add(manager.AddRequest{
-			URL:         url,
-			Destination: dst,
-			Options:     opts,
-		})
+		id, err := mgr.Add(req)
 		if err != nil {
 			return actionResultMsg{err: err}
 		}
@@ -23,7 +18,7 @@ func addDownloadCmd(mgr *manager.Manager, url, dst string, opts download.Options
 	}
 }
 
-func pauseCmd(mgr *manager.Manager, id string) tea.Cmd {
+func pauseCmd(mgr manager.Interface, id string) tea.Cmd {
 	return func() tea.Msg {
 		err := mgr.Pause(id)
 		if err != nil {
@@ -33,7 +28,7 @@ func pauseCmd(mgr *manager.Manager, id string) tea.Cmd {
 	}
 }
 
-func resumeCmd(mgr *manager.Manager, id string) tea.Cmd {
+func resumeCmd(mgr manager.Interface, id string) tea.Cmd {
 	return func() tea.Msg {
 		err := mgr.Resume(id)
 		if err != nil {
@@ -43,7 +38,7 @@ func resumeCmd(mgr *manager.Manager, id string) tea.Cmd {
 	}
 }
 
-func removeCmd(mgr *manager.Manager, id string, cleanup bool) tea.Cmd {
+func removeCmd(mgr manager.Interface, id string, cleanup bool) tea.Cmd {
 	return func() tea.Msg {
 		err := mgr.Remove(id, cleanup)
 		if err != nil {
@@ -53,9 +48,9 @@ func removeCmd(mgr *manager.Manager, id string, cleanup bool) tea.Cmd {
 	}
 }
 
-func reorderQueueCmd(mgr *manager.Manager, queue []string) tea.Cmd {
+func reorderQueueCmd(mgr manager.Interface, ids []string) tea.Cmd {
 	return func() tea.Msg {
-		err := mgr.ReorderQueue(queue)
+		err := mgr.ReorderQueue(ids)
 		if err != nil {
 			return actionResultMsg{err: err}
 		}

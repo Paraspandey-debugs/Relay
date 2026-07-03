@@ -92,37 +92,99 @@ func (m *Model) View() string {
 		if innerWidth <= 0 {
 			innerWidth = m.width
 		}
-		leftOuterWidth := innerWidth / 2
-		rightOuterWidth := innerWidth - leftOuterWidth
 
-		// LeftPane/RightPane each have border + horizontal padding = 4 columns.
-		// Components receive content width; styles add the chrome.
-		const paneChromeHoriz = 4
-		leftContentWidth := leftOuterWidth - paneChromeHoriz
-		rightContentWidth := rightOuterWidth - paneChromeHoriz
-		if leftContentWidth < 12 {
-			leftContentWidth = 12
-		}
-		if rightContentWidth < 12 {
-			rightContentWidth = 12
-		}
-
-		m.jobsList.SetSize(leftContentWidth, availHeight)
-		// send window size to detail component so it updates its internal width/height
-		m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightContentWidth, Height: availHeight})
-
-		var rightPane string
-		if m.removeConfirm {
-			rightPane = m.renderConfirmOverlay(rightContentWidth, availHeight)
+		hideRightPane := false
+		verticalLayout := false
+		
+		var leftOuterWidth, rightOuterWidth int
+		if innerWidth < 90 {
+			// Terminal is too narrow for side-by-side.
+			leftOuterWidth = innerWidth
+			rightOuterWidth = innerWidth
+			if availHeight >= 20 {
+				verticalLayout = true
+			} else {
+				hideRightPane = true
+			}
 		} else {
-			rightPane = m.details.View()
+			leftOuterWidth = (innerWidth * 55) / 100 // 55% for list
+			rightOuterWidth = innerWidth - leftOuterWidth
 		}
 
-		// Dash Layout Main
-		mainSplit := lipgloss.JoinHorizontal(lipgloss.Top,
-			m.jobsList.View(),
-			rightPane,
-		)
+		var mainSplit string
+		leftTitle := m.styles.Label.Render(" Downloads ")
+		rightTitle := m.styles.Label.Render(" Details ")
+
+		if hideRightPane {
+			m.jobsList.SetSize(leftOuterWidth - BorderFrameWidth, availHeight - BorderFrameHeight)
+			leftBox := RenderBtopBox(leftTitle, "", m.jobsList.View(), leftOuterWidth, availHeight, m.theme.Muted)
+			mainSplit = leftBox
+		} else if verticalLayout {
+			listHeight := availHeight / 2
+			detailHeight := availHeight - listHeight
+			
+			m.jobsList.SetSize(leftOuterWidth - BorderFrameWidth, listHeight - BorderFrameHeight)
+			m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightOuterWidth - BorderFrameWidth, Height: detailHeight - BorderFrameHeight})
+			
+			var rightPane string
+			if m.removeConfirm {
+				rightPane = m.renderConfirmOverlay(rightOuterWidth - BorderFrameWidth, detailHeight - BorderFrameHeight)
+			} else {
+				rightPane = m.details.View()
+			}
+
+			leftBox := RenderBtopBox(leftTitle, "", m.jobsList.View(), leftOuterWidth, listHeight, m.theme.Muted)
+			rightBox := RenderBtopBox(rightTitle, "", rightPane, rightOuterWidth, detailHeight, m.theme.Muted)
+			
+			mainSplit = lipgloss.JoinVertical(lipgloss.Left, leftBox, rightBox)
+		} else {
+			m.jobsList.SetSize(leftOuterWidth - BorderFrameWidth, availHeight - BorderFrameHeight)
+			
+			graphHeight := availHeight / 3
+			if graphHeight < 8 {
+				graphHeight = 8
+			}
+			
+			var rightCol string
+			
+			if availHeight < 20 {
+				m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightOuterWidth - BorderFrameWidth, Height: availHeight - BorderFrameHeight})
+				var rightPane string
+				if m.removeConfirm {
+					rightPane = m.renderConfirmOverlay(rightOuterWidth - BorderFrameWidth, availHeight - BorderFrameHeight)
+				} else {
+					rightPane = m.details.View()
+				}
+				rightCol = RenderBtopBox(rightTitle, "", rightPane, rightOuterWidth, availHeight, m.theme.Muted)
+			} else {
+				detailHeight := availHeight - graphHeight
+				
+				totalDownloaded := int64(0)
+				for _, rec := range m.mgr.List() {
+					totalDownloaded += rec.Progress.Downloaded
+				}
+
+				graphBox := renderGraphBox(rightOuterWidth, graphHeight, m.speedHistory, m.theme, m.styles, totalDownloaded)
+				
+				m.details, _ = m.details.Update(tea.WindowSizeMsg{Width: rightOuterWidth - BorderFrameWidth, Height: detailHeight - BorderFrameHeight})
+				var rightPane string
+				if m.removeConfirm {
+					rightPane = m.renderConfirmOverlay(rightOuterWidth - BorderFrameWidth, detailHeight - BorderFrameHeight)
+				} else {
+					rightPane = m.details.View()
+				}
+				detailBox := RenderBtopBox(rightTitle, "", rightPane, rightOuterWidth, detailHeight, m.theme.Muted)
+				
+				rightCol = lipgloss.JoinVertical(lipgloss.Left, graphBox, detailBox)
+			}
+
+			leftBox := RenderBtopBox(leftTitle, "", m.jobsList.View(), leftOuterWidth, availHeight, m.theme.Muted)
+
+			mainSplit = lipgloss.JoinHorizontal(lipgloss.Top,
+				leftBox,
+				rightCol,
+			)
+		}
 
 		// Wrap the two panes in a card-area background so there are no uncolored gaps.
 		// Width keeps any odd leftover column painted with the card color.

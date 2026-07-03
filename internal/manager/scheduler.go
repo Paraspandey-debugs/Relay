@@ -35,8 +35,12 @@ func (m *Manager) scheduleLocked() {
 }
 
 func (m *Manager) publishLocked(e Event) {
-	select {
-	case m.events <- e:
-	default:
+	m.subMutex.RLock()
+	defer m.subMutex.RUnlock()
+	for _, ch := range m.subscribers {
+		select {
+		case ch <- e:
+		default:
+		}
 	}
 }

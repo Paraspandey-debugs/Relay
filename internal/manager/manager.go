@@ -16,12 +16,16 @@ type Manager struct {
 	queue         []string
 	active        map[string]struct{}
 	maxConcurrent int
+	defaultWorkers int
 	statePath     string
 	dbPath        string
 	store         StateStore
 	persistEvery  time.Duration
 	lastPersistAt time.Time
-	events        chan Event
+	
+	subMutex      sync.RWMutex
+	subscribers   map[<-chan Event]chan Event
+	
 	autoStart     bool
 	closed        bool
 
@@ -50,15 +54,16 @@ func New(cfg Config) (*Manager, error) {
 	}
 
 	m := &Manager{
-		jobs:          make(map[string]*managedDownload),
-		queue:         make([]string, 0),
-		active:        make(map[string]struct{}),
-		maxConcurrent: cfg.MaxConcurrent,
-		statePath:     cfg.StatePath,
-		dbPath:        dbPath,
-		persistEvery:  time.Second,
-		events:        make(chan Event, cfg.EventBuffer),
-		autoStart:     cfg.AutoStart,
+		jobs:           make(map[string]*managedDownload),
+		queue:          make([]string, 0),
+		active:         make(map[string]struct{}),
+		maxConcurrent:  cfg.MaxConcurrent,
+		defaultWorkers: 0,
+		statePath:      cfg.StatePath,
+		dbPath:         dbPath,
+		persistEvery:   time.Second,
+		subscribers:    make(map[<-chan Event]chan Event),
+		autoStart:      cfg.AutoStart,
 	}
 
 	store, err := NewDBStore(m.dbPath)
@@ -80,8 +85,24 @@ func New(cfg Config) (*Manager, error) {
 	return m, nil
 }
 
-func (m *Manager) Events() <-chan Event {
-	return m.events
+func (m *Manager) Subscribe() <-chan Event {
+	ch := make(chan Event, 256)
+	m.subMutex.Lock()
+	m.subscribers[ch] = ch
+	m.subMutex.Unlock()
+	return ch
+}
+
+func (m *Manager) Unsubscribe(ch <-chan Event) {
+	if ch == nil {
+		return
+	}
+	m.subMutex.Lock()
+	if c, ok := m.subscribers[ch]; ok {
+		delete(m.subscribers, ch)
+		close(c)
+	}
+	m.subMutex.Unlock()
 }
 
 func (m *Manager) Add(req AddRequest) (string, error) {
@@ -304,6 +325,38 @@ func (m *Manager) Queue() []string {
 	return append([]string(nil), m.queue...)
 }
 
+func (m *Manager) SetMaxConcurrent(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
+	m.maxConcurrent = n
+	// Re-schedule in case we can now start more downloads
+	m.scheduleLocked()
+}
+
+func (m *Manager) SetDefaultWorkers(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n < 0 {
+		n = 0
+	}
+	m.defaultWorkers = n
+}
+
+func (m *Manager) GetMaxConcurrent() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maxConcurrent
+}
+
+func (m *Manager) GetDefaultWorkers() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.defaultWorkers
+}
+
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	if m.closed {
@@ -338,7 +391,13 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	case <-waitCh:
 	}
 
-	close(m.events)
+	m.subMutex.Lock()
+	for _, c := range m.subscribers {
+		close(c)
+	}
+	m.subscribers = nil
+	m.subMutex.Unlock()
+
 	if m.store != nil {
 		m.store.Close()
 	}

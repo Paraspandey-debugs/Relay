@@ -256,16 +256,10 @@ func newStyles(t Theme) styles {
 			Bold(true).
 			Padding(0, 1),
 		LeftPane: lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(t.Muted)).
-			BorderBackground(lipgloss.Color(t.Card)).
 			Background(lipgloss.Color(t.Card)).
-			Padding(1, 1),
+			Padding(0, 0),
 		RightPane: lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(lipgloss.Color(t.Muted)).
-			BorderBackground(lipgloss.Color(t.Card)).
 			Background(lipgloss.Color(t.Card)).
-			Padding(1, 1),
+			Padding(0, 0),
 	}
 }

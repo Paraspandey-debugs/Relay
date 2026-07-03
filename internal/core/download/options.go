@@ -2,6 +2,7 @@ package download
 
 import "time"
 
+// Options controls the behaviour of DownloadFileV2.
 type Options struct {
 	Workers            int
 	MinChunkSize       int64
@@ -16,20 +17,45 @@ type Options struct {
 	ProgressInterval   time.Duration
 	ForceSingle        bool
 	RequireAcceptRange bool
+	HandleRateLimits   bool
+
+	// RateLimitBps throttles download throughput (bytes/sec). 0 = unlimited.
+	RateLimitBps int64
+
+	// Mirrors is a list of alternative URLs that serve the same file.
+	// Workers round-robin across the primary URL and mirrors.
+	Mirrors []string
+
+	// StallTimeout is how long a worker may go without receiving any bytes
+	// before the health monitor cancels it and requeues its remaining work.
+	// Default: 10s
+	StallTimeout time.Duration
+
+	// SlowWorkerGracePeriod is how long a new task is immune from slow-worker
+	// cancellation. Default: 5s.
+	SlowWorkerGracePeriod time.Duration
+
+	// SlowWorkerThreshold is the fraction of mean speed below which a worker
+	// is considered slow (e.g. 0.1 = slower than 10% of mean). 0 = disabled.
+	SlowWorkerThreshold float64
 }
 
 func DefaultOptions() Options {
 	return Options{
-		Workers:            12,
-		MinChunkSize:       1 * 1024 * 1024,
-		MaxChunkSize:       8 * 1024 * 1024,
-		Timeout:            30 * time.Second,
-		MaxRetries:         10,
-		BaseBackoff:        500 * time.Millisecond,
-		MaxBackoff:         20 * time.Second,
-		UserAgent:          "dlmgr/2.0",
-		ProgressInterval:   500 * time.Millisecond,
-		RequireAcceptRange: false,
+		Workers:               4,   // conservative default; increase if server supports it
+		MinChunkSize:          2 * 1024 * 1024,  // 2 MB
+		MaxChunkSize:          16 * 1024 * 1024, // 16 MB
+		Timeout:               30 * time.Second,
+		MaxRetries:            5,
+		BaseBackoff:           500 * time.Millisecond,
+		MaxBackoff:            60 * time.Second,
+		UserAgent:             "Relay/2.0",
+		ProgressInterval:      250 * time.Millisecond,
+		RequireAcceptRange:    false,
+		HandleRateLimits:      true,
+		StallTimeout:          10 * time.Second,
+		SlowWorkerGracePeriod: 5 * time.Second,
+		SlowWorkerThreshold:   0.1, // cancel if < 10% of mean speed
 	}
 }
 
@@ -73,5 +99,22 @@ func mergeOptions(a, b Options) Options {
 	if b.RequireAcceptRange {
 		a.RequireAcceptRange = true
 	}
+	if b.RateLimitBps != 0 {
+		a.RateLimitBps = b.RateLimitBps
+	}
+	if len(b.Mirrors) > 0 {
+		a.Mirrors = b.Mirrors
+	}
+	if b.StallTimeout != 0 {
+		a.StallTimeout = b.StallTimeout
+	}
+	if b.SlowWorkerGracePeriod != 0 {
+		a.SlowWorkerGracePeriod = b.SlowWorkerGracePeriod
+	}
+	if b.SlowWorkerThreshold != 0 {
+		a.SlowWorkerThreshold = b.SlowWorkerThreshold
+	}
+	// HandleRateLimits defaults to true; copy explicitly.
+	a.HandleRateLimits = b.HandleRateLimits
 	return a
 }

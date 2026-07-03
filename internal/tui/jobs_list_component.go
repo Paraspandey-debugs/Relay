@@ -46,6 +46,21 @@ func (m JobsListComponent) Update(msg tea.Msg) (JobsListComponent, tea.Cmd) {
 	oldID := m.SelectedID()
 	switch msg := msg.(type) {
 	case manager.Event:
+		// Handle removal separately
+		if msg.Type == manager.EventRemoved {
+			delete(m.jobs, msg.ID)
+			// Remove from order slice
+			newOrder := make([]string, 0, len(m.order))
+			for _, id := range m.order {
+				if id != msg.ID {
+					newOrder = append(newOrder, id)
+				}
+			}
+			m.order = newOrder
+			m.ensureSelection()
+			break
+		}
+
 		// Diff-based state update!
 		if job, exists := m.jobs[msg.ID]; exists {
 			job.Status = msg.Status
@@ -74,6 +89,7 @@ func (m JobsListComponent) Update(msg tea.Msg) (JobsListComponent, tea.Cmd) {
 
 	case updateFullStateMsg: // custom internal message for full resync sync
 		m.order = nil
+		m.jobs = make(map[string]*manager.DownloadRecord)
 		for _, item := range msg.items {
 			itemCopy := item
 			m.jobs[item.ID] = &itemCopy

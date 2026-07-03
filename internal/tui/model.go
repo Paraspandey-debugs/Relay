@@ -116,7 +116,7 @@ func WithTickEvery(d time.Duration) Option {
 
 type Model struct {
 	ctx context.Context
-	mgr *manager.Manager
+	mgr manager.Interface
 
 	// items, queue, selected removed – now delegated to jobsList
 	width  int
@@ -173,6 +173,7 @@ type Model struct {
 	jobsList JobsListComponent
 	details  DetailComponent
 	stats    StatsComponent
+	speedHistory []float64
 }
 
 type memoProgress struct {
@@ -192,7 +193,7 @@ type browserEntry struct {
 	isDir bool
 }
 
-func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model {
+func NewModel(ctx context.Context, mgr manager.Interface, opts ...Option) *Model {
 	homeDir := resolveBrowserHomeDir()
 
 	in := textinput.New()
@@ -264,16 +265,18 @@ func NewModel(ctx context.Context, mgr *manager.Manager, opts ...Option) *Model 
 	return m
 }
 
-func Run(ctx context.Context, mgr *manager.Manager, opts ...Option) error {
+func Run(ctx context.Context, mgr manager.Interface, opts ...Option) error {
 	m := NewModel(ctx, mgr, opts...)
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithAltScreen())
 
 	go func() {
+		ch := mgr.Subscribe()
+		defer mgr.Unsubscribe(ch)
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case event, ok := <-mgr.Events():
+			case event, ok := <-ch:
 				if !ok {
 					return
 				}

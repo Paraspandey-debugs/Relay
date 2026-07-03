@@ -113,6 +113,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				delete(m.progressMemo, id)
 			}
 		}
+		
+		m.speedHistory = append(m.speedHistory, m.jobsList.GetAggregateSpeed())
+		if len(m.speedHistory) > 120 {
+			m.speedHistory = m.speedHistory[len(m.speedHistory)-120:]
+		}
+		
 		return m, tickCmd(m.tickEvery)
 	default:
 		if m.screen == addScreen || (m.screen == settingsScreen && m.settingsEditing) {
@@ -190,7 +196,12 @@ func (m *Model) handleAddInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.step = addURLStep
 		m.input.SetValue("")
 		m.input.Placeholder = "https://example.com/file.iso"
-		return m, addDownloadCmd(m.mgr, m.add.url, m.add.dst, m.defaultAddOptions)
+		req := manager.AddRequest{
+			URL:         m.add.url,
+			Destination: m.add.dst,
+			Options:     m.defaultAddOptions,
+		}
+		return m, addDownloadCmd(m.mgr, req)
 	default:
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)

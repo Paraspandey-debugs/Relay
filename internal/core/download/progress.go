@@ -2,7 +2,6 @@ package download
 
 import (
 	"context"
-	"math"
 	"sync/atomic"
 	"time"
 )
@@ -30,106 +29,82 @@ func emitProgress(
 		return
 	}
 	if interval <= 0 {
-		interval = 500 * time.Millisecond
+		interval = 250 * time.Millisecond
 	}
 	tk := time.NewTicker(interval)
 	defer tk.Stop()
 
-	lastN := written.Load()
-	lastT := time.Now()
-	smoothedSpeed := 0.0
-	varianceSpeed := 0.0
+	// Sliding window for accurate speed calculation (approx 3 seconds)
+	const windowSamples = 12
+	type sample struct {
+		n int64
+		t time.Time
+	}
+	var window [windowSamples]sample
+	var windowIdx int
+	var numSamples int
+
+	initialN := written.Load()
+	now := time.Now()
+	
+	window[0] = sample{n: initialN, t: now}
+	windowIdx = 1
+	numSamples = 1
+
 	smoothedETASeconds := 0.0
-	const (
-		smoothingAlpha      = 0.25
-		etaSmoothingAlpha   = 0.30
-		idleDecayFactor     = 0.85
-		minSampleSeconds    = 0.20
-		jitterPenaltyFactor = 1.10
-		minNormalizedRatio  = 0.35
-	)
 
 	send := func(force bool) {
-		now := time.Now()
-		n := written.Load()
-		dn := n - lastN
-		dt := now.Sub(lastT).Seconds()
-
-		// Ignore very short sampling windows when forced (e.g. completion signal),
-		// because they produce unrealistic instantaneous speed spikes.
-		if dt >= minSampleSeconds {
-			if dn < 0 {
-				dn = 0
-			}
-			instant := 0.0
-			if dt > 0 {
-				instant = float64(dn) / dt
-			}
-
-			if dn == 0 {
-				smoothedSpeed *= idleDecayFactor
-			} else if smoothedSpeed <= 0 {
-				smoothedSpeed = instant
-			} else {
-				smoothedSpeed = (1-smoothingAlpha)*smoothedSpeed + smoothingAlpha*instant
-			}
+		currT := time.Now()
+		currN := written.Load()
+		
+		// Update sliding window
+		window[windowIdx] = sample{n: currN, t: currT}
+		windowIdx = (windowIdx + 1) % windowSamples
+		if numSamples < windowSamples {
+			numSamples++
 		}
 
-		speed := smoothedSpeed
-		if speed < 0 {
-			speed = 0
+		// Calculate speed over the sliding window
+		oldestIdx := windowIdx
+		if numSamples < windowSamples {
+			oldestIdx = 0
+		}
+		
+		oldest := window[oldestIdx]
+		dn := currN - oldest.n
+		dt := currT.Sub(oldest.t).Seconds()
+		
+		speed := 0.0
+		if dt > 0.1 && dn > 0 { // Need at least 100ms delta to avoid div zero
+			speed = float64(dn) / dt
 		}
 
-		normalizedSpeed := speed
-		if normalizedSpeed > 0 {
-			stddev := math.Sqrt(math.Max(varianceSpeed, 0))
-			normalizedSpeed = speed - (jitterPenaltyFactor * stddev)
-			floor := speed * minNormalizedRatio
-			if normalizedSpeed < floor {
-				normalizedSpeed = floor
-			}
-		}
-
+		// ETA Calculation
 		eta := time.Duration(0)
-		if total > 0 && normalizedSpeed > 0 && n <= total {
-			rawETASeconds := float64(total-n) / normalizedSpeed
-			if rawETASeconds < 0 {
-				rawETASeconds = 0
-			}
+		if total > 0 && speed > 0 && currN <= total {
+			rawETASeconds := float64(total-currN) / speed
 			if smoothedETASeconds <= 0 {
 				smoothedETASeconds = rawETASeconds
 			} else {
-				smoothedETASeconds = (1-etaSmoothingAlpha)*smoothedETASeconds + etaSmoothingAlpha*rawETASeconds
+				smoothedETASeconds = 0.7*smoothedETASeconds + 0.3*rawETASeconds // Slight smoothing for ETA only
 			}
 			eta = time.Duration(smoothedETASeconds * float64(time.Second))
 		} else {
 			smoothedETASeconds = 0
 		}
+
 		msg := ProgressMsg{
-			Downloaded: n,
+			Downloaded: currN,
 			Total:      total,
 			SpeedBps:   speed,
 			ETA:        eta,
 			Workers:    int(workers),
 			Retries:    retries.Load(),
 		}
+		
 		select {
 		case ch <- msg:
 		default:
-		}
-		lastN = n
-		lastT = now
-
-		if dn > 0 && dt >= minSampleSeconds {
-			instant := float64(dn) / dt
-			if speed <= 0 {
-				varianceSpeed = 0
-			} else {
-				delta := instant - speed
-				varianceSpeed = (1-smoothingAlpha)*varianceSpeed + smoothingAlpha*delta*delta
-			}
-		} else if dn == 0 {
-			varianceSpeed *= idleDecayFactor
 		}
 	}
 
